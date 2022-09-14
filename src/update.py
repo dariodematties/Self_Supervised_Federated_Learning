@@ -30,8 +30,13 @@ class LocalUpdate(object):
         self.trainloader, self.validloader, self.testloader = self.train_val_test(
             dataset, list(idxs))
         self.device = 'cuda' if args.gpu else 'cpu'
-        # Default criterion set to NLL loss function
-        self.criterion = nn.NLLLoss().to(self.device)
+        if args.supervision:
+            # Supervised learning
+            # Default criterion set to NLL loss function
+            self.criterion = nn.NLLLoss().to(self.device)
+        else:
+            # Self-Supervised learning
+            self.criterion = nn.MSELoss().to(self.device)
 
     def train_val_test(self, dataset, idxs):
         """
@@ -64,27 +69,54 @@ class LocalUpdate(object):
             optimizer = torch.optim.Adam(model.parameters(), lr=self.args.lr,
                                          weight_decay=1e-4)
 
-        for iter in range(self.args.local_ep):
-            batch_loss = []
-            for batch_idx, (images, labels) in enumerate(self.trainloader):
-                images, labels = images.to(self.device), labels.to(self.device)
+        if self.args.supervision:
+            # Supervised learning
+            for iter in range(self.args.local_ep):
+                batch_loss = []
+                for batch_idx, (images, labels) in enumerate(self.trainloader):
+                    images, labels = images.to(self.device), labels.to(self.device)
 
-                model.zero_grad()
-                log_probs = model(images)
-                loss = self.criterion(log_probs, labels)
-                loss.backward()
-                optimizer.step()
+                    model.zero_grad()
+                    log_probs = model(images)
+                    loss = self.criterion(log_probs, labels)
+                    loss.backward()
+                    optimizer.step()
 
-                if self.args.verbose and (batch_idx % 10 == 0):
-                    print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                        global_round, iter, batch_idx * len(images),
-                        len(self.trainloader.dataset),
-                        100. * batch_idx / len(self.trainloader), loss.item()))
-                self.logger.add_scalar('loss', loss.item())
-                batch_loss.append(loss.item())
-            epoch_loss.append(sum(batch_loss)/len(batch_loss))
+                    if self.args.verbose and (batch_idx % 10 == 0):
+                        print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                            global_round, iter, batch_idx * len(images),
+                            len(self.trainloader.dataset),
+                            100. * batch_idx / len(self.trainloader), loss.item()))
+                    self.logger.add_scalar('loss', loss.item())
+                    batch_loss.append(loss.item())
+                epoch_loss.append(sum(batch_loss)/len(batch_loss))
 
-        return model.state_dict(), sum(epoch_loss) / len(epoch_loss)
+            return model.state_dict(), sum(epoch_loss) / len(epoch_loss)
+        else:
+            # Self-Supervised learning
+            Outputs = []
+            for iter in range(self.args.local_ep):
+                batch_loss = []
+                for batch_idx, (images, _) in enumerate(self.trainloader):
+                    images = images.to(self.device)
+
+                    model.zero_grad()
+                    outputs = model(images)
+                    loss = self.criterion(outputs, images)
+                    loss.backward()
+                    optimizer.step()
+
+                    if self.args.verbose and (batch_idx % 10 == 0):
+                        print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                            global_round, iter, batch_idx * len(images),
+                            len(self.trainloader.dataset),
+                            100. * batch_idx / len(self.trainloader), loss.item()))
+                    self.logger.add_scalar('loss', loss.item())
+                    batch_loss.append(loss.item())
+                epoch_loss.append(sum(batch_loss)/len(batch_loss))
+                Outputs.append((iter, images, outputs),)
+
+            return model.state_dict(), sum(epoch_loss) / len(epoch_loss), Outputs
 
     def inference(self, model):
         """ Returns the inference accuracy and loss.
@@ -93,21 +125,36 @@ class LocalUpdate(object):
         model.eval()
         loss, total, correct = 0.0, 0.0, 0.0
 
-        for batch_idx, (images, labels) in enumerate(self.testloader):
-            images, labels = images.to(self.device), labels.to(self.device)
+        if self.args.supervision:
+            # Supervised learning
+            for batch_idx, (images, labels) in enumerate(self.testloader):
+                images, labels = images.to(self.device), labels.to(self.device)
 
-            # Inference
-            outputs = model(images)
-            batch_loss = self.criterion(outputs, labels)
-            loss += batch_loss.item()
+                # Inference
+                outputs = model(images)
+                batch_loss = self.criterion(outputs, labels)
+                loss += batch_loss.item()
 
-            # Prediction
-            _, pred_labels = torch.max(outputs, 1)
-            pred_labels = pred_labels.view(-1)
-            correct += torch.sum(torch.eq(pred_labels, labels)).item()
-            total += len(labels)
+                # Prediction
+                _, pred_labels = torch.max(outputs, 1)
+                pred_labels = pred_labels.view(-1)
+                correct += torch.sum(torch.eq(pred_labels, labels)).item()
+                total += len(labels)
 
-        accuracy = correct/total
+            accuracy = correct/total
+        else:
+            # Self-Supervised learning
+            for batch_idx, (images, labels) in enumerate(self.testloader):
+                images = images.to(self.device)
+
+                # Inference
+                outputs = model(images)
+                batch_loss = self.criterion(outputs, images)
+                loss += batch_loss.item()
+
+                total += len(labels)
+
+            accuracy = loss/total
         return accuracy, loss
 
 
@@ -119,23 +166,50 @@ def test_inference(args, model, test_dataset):
     loss, total, correct = 0.0, 0.0, 0.0
 
     device = 'cuda' if args.gpu else 'cpu'
-    criterion = nn.NLLLoss().to(device)
+    #criterion = nn.NLLLoss().to(device)
     testloader = DataLoader(test_dataset, batch_size=128,
                             shuffle=False)
 
-    for batch_idx, (images, labels) in enumerate(testloader):
-        images, labels = images.to(device), labels.to(device)
 
-        # Inference
-        outputs = model(images)
-        batch_loss = criterion(outputs, labels)
-        loss += batch_loss.item()
 
-        # Prediction
-        _, pred_labels = torch.max(outputs, 1)
-        pred_labels = pred_labels.view(-1)
-        correct += torch.sum(torch.eq(pred_labels, labels)).item()
-        total += len(labels)
+    if args.supervision:
+        # Supervised learning
+        # Default criterion set to NLL loss function
+        criterion = nn.NLLLoss().to(device)
+    else:
+        # Self-Supervised learning
+        criterion = nn.MSELoss().to(device)
 
-    accuracy = correct/total
+
+
+    if args.supervision:
+        # Supervised learning
+        for batch_idx, (images, labels) in enumerate(testloader):
+            images, labels = images.to(device), labels.to(device)
+
+            # Inference
+            outputs = model(images)
+            batch_loss = criterion(outputs, labels)
+            loss += batch_loss.item()
+
+            # Prediction
+            _, pred_labels = torch.max(outputs, 1)
+            pred_labels = pred_labels.view(-1)
+            correct += torch.sum(torch.eq(pred_labels, labels)).item()
+            total += len(labels)
+
+        accuracy = correct/total
+    else:
+        # Self-Supervised learning
+        for batch_idx, (images, labels) in enumerate(testloader):
+            images = images.to(device)
+
+            # Inference
+            outputs = model(images)
+            batch_loss = criterion(outputs, images)
+            loss += batch_loss.item()
+
+            total += len(labels)
+
+        accuracy = loss/total
     return accuracy, loss

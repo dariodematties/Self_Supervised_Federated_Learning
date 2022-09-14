@@ -16,6 +16,7 @@ from tensorboardX import SummaryWriter
 from options import args_parser
 from update import LocalUpdate, test_inference
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
+from models import AutoencoderMNIST
 from utils import get_dataset, average_weights, exp_details
 
 
@@ -29,33 +30,50 @@ if __name__ == '__main__':
     args = args_parser()
     exp_details(args)
 
-    if args.gpu_id:
-        torch.cuda.set_device(args.gpu_id)
+    if args.gpu:
+        torch.cuda.set_device(int(args.gpu))
     device = 'cuda' if args.gpu else 'cpu'
 
     # load dataset and user groups
     train_dataset, test_dataset, user_groups = get_dataset(args)
 
-    # BUILD MODEL
-    if args.model == 'cnn':
-        # Convolutional neural netork
-        if args.dataset == 'mnist':
-            global_model = CNNMnist(args=args)
-        elif args.dataset == 'fmnist':
-            global_model = CNNFashion_Mnist(args=args)
-        elif args.dataset == 'cifar':
-            global_model = CNNCifar(args=args)
+    print(user_groups.keys())
+    print(user_groups[0])
 
-    elif args.model == 'mlp':
-        # Multi-layer preceptron
-        img_size = train_dataset[0][0].shape
-        len_in = 1
-        for x in img_size:
-            len_in *= x
-            global_model = MLP(dim_in=len_in, dim_hidden=64,
-                               dim_out=args.num_classes)
+    #train_dataset = list(train_dataset)[:4096]
+    #test_dataset = list(test_dataset)[:4096]
+
+    # BUILD MODEL
+    if args.supervision:
+        # Supervised learning
+        if args.model == 'cnn':
+            # Convolutional neural netork
+            if args.dataset == 'mnist':
+                global_model = CNNMnist(args=args)
+            elif args.dataset == 'fmnist':
+                global_model = CNNFashion_Mnist(args=args)
+            elif args.dataset == 'cifar':
+                global_model = CNNCifar(args=args)
+
+        elif args.model == 'mlp':
+            # Multi-layer preceptron
+            img_size = train_dataset[0][0].shape
+            len_in = 1
+            for x in img_size:
+                len_in *= x
+                global_model = MLP(dim_in=len_in, dim_hidden=64,
+                                   dim_out=args.num_classes)
+        else:
+            exit('Error: unrecognized model')
     else:
-        exit('Error: unrecognized model')
+        # Self supervised learning
+        if args.model == 'autoencoder':
+            # Transpose Convolution and Autoencoder
+            if args.dataset == 'mnist':
+                global_model = AutoencoderMNIST(args=args)
+
+        else:
+            exit('Error: unrecognized unsupervised model')
 
     # Set the model to train and send it to device.
     global_model.to(device)
@@ -74,6 +92,7 @@ if __name__ == '__main__':
 
     for epoch in tqdm(range(args.epochs)):
         local_weights, local_losses = [], []
+        local_outputs = []
         print(f'\n | Global Training Round : {epoch+1} |\n')
 
         global_model.train()
@@ -83,10 +102,20 @@ if __name__ == '__main__':
         for idx in idxs_users:
             local_model = LocalUpdate(args=args, dataset=train_dataset,
                                       idxs=user_groups[idx], logger=logger)
-            w, loss = local_model.update_weights(
-                model=copy.deepcopy(global_model), global_round=epoch)
-            local_weights.append(copy.deepcopy(w))
-            local_losses.append(copy.deepcopy(loss))
+            if args.supervision:
+                # Supervised learning
+                w, loss = local_model.update_weights(
+                    model=copy.deepcopy(global_model), global_round=epoch)
+                local_weights.append(copy.deepcopy(w))
+                local_losses.append(copy.deepcopy(loss))
+            else:
+                # Self-Supervised learning
+                w, loss, out = local_model.update_weights(
+                        model=copy.deepcopy(global_model), global_round=epoch)
+                local_weights.append(copy.deepcopy(w))
+                local_losses.append(copy.deepcopy(loss))
+                local_outputs.append(out)
+
 
         # update global weights
         global_weights = average_weights(local_weights)
@@ -112,17 +141,24 @@ if __name__ == '__main__':
         if (epoch+1) % print_every == 0:
             print(f' \nAvg Training Stats after {epoch+1} global rounds:')
             print(f'Training Loss : {np.mean(np.array(train_loss))}')
-            print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
+            if args.supervision:
+                print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
+            else:
+                print('Train MSE: {:.8f} \n'.format(train_accuracy[-1]))
 
     # Test inference after completion of training
     test_acc, test_loss = test_inference(args, global_model, test_dataset)
 
     print(f' \n Results after {args.epochs} global rounds of training:')
-    print("|---- Avg Train Accuracy: {:.2f}%".format(100*train_accuracy[-1]))
-    print("|---- Test Accuracy: {:.2f}%".format(100*test_acc))
+    if args.supervision:
+        print("|---- Avg Train Accuracy: {:.2f}%".format(100*train_accuracy[-1]))
+        print("|---- Test Accuracy: {:.2f}%".format(100*test_acc))
+    else:
+        print("|---- Avg Train MSE: {:.8f}".format(train_accuracy[-1]))
+        print("|---- Test MSE: {:.8f}".format(test_acc))
 
     # Saving the objects train_loss and train_accuracy:
-    file_name = '../save/objects/{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}].pkl'.\
+    file_name = './save/objects/{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}].pkl'.\
         format(args.dataset, args.model, args.epochs, args.frac, args.iid,
                args.local_ep, args.local_bs)
 
@@ -132,26 +168,50 @@ if __name__ == '__main__':
     print('\n Total Run Time: {0:0.4f}'.format(time.time()-start_time))
 
     # PLOTTING (optional)
-    # import matplotlib
-    # import matplotlib.pyplot as plt
-    # matplotlib.use('Agg')
+    import matplotlib
+    import matplotlib.pyplot as plt
+    matplotlib.use('Agg')
 
     # Plot Loss curve
-    # plt.figure()
-    # plt.title('Training Loss vs Communication rounds')
-    # plt.plot(range(len(train_loss)), train_loss, color='r')
-    # plt.ylabel('Training loss')
-    # plt.xlabel('Communication Rounds')
-    # plt.savefig('../save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_loss.png'.
-    #             format(args.dataset, args.model, args.epochs, args.frac,
-    #                    args.iid, args.local_ep, args.local_bs))
-    #
-    # # Plot Average Accuracy vs Communication rounds
-    # plt.figure()
-    # plt.title('Average Accuracy vs Communication rounds')
-    # plt.plot(range(len(train_accuracy)), train_accuracy, color='k')
-    # plt.ylabel('Average Accuracy')
-    # plt.xlabel('Communication Rounds')
-    # plt.savefig('../save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_acc.png'.
-    #             format(args.dataset, args.model, args.epochs, args.frac,
-    #                    args.iid, args.local_ep, args.local_bs))
+    plt.figure()
+    plt.title('Training Loss vs Communication rounds')
+    plt.plot(range(len(train_loss)), train_loss, color='r')
+    plt.ylabel('Training loss')
+    plt.xlabel('Communication Rounds')
+    plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_loss.png'.
+                format(args.dataset, args.model, args.epochs, args.frac,
+                       args.iid, args.local_ep, args.local_bs))
+    
+    # Plot Average Accuracy vs Communication rounds
+    plt.figure()
+    plt.title('Average Accuracy vs Communication rounds')
+    plt.plot(range(len(train_accuracy)), train_accuracy, color='k')
+    plt.ylabel('Average Accuracy')
+    plt.xlabel('Communication Rounds')
+    plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_acc.png'.
+                format(args.dataset, args.model, args.epochs, args.frac,
+                       args.iid, args.local_ep, args.local_bs))
+
+
+
+    # Plot outputs
+    #for k in range(0, args.epochs, 5):
+    for k in range(0, args.local_ep, 5):
+        plt.figure(figsize=(9, 2))
+        imgs = local_outputs[0][k][1].cpu().detach().numpy()
+        recon = local_outputs[0][k][2].cpu().detach().numpy()
+        for i, item in enumerate(imgs):
+            if i >= 9: break
+            plt.subplot(2, 9, i+1)
+            plt.axis('off')
+            plt.imshow(item[0])
+            
+        for i, item in enumerate(recon):
+            if i >= 9: break
+            plt.subplot(2, 9, 9+i+1)
+            plt.axis('off')
+            plt.imshow(item[0])
+
+        plt.savefig('./image_{}.png'.format(k))
+        plt.close()
+

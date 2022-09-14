@@ -25,6 +25,9 @@ def args_parser():
                         help='SGD momentum (default: 0.5)')
 
     # model arguments
+    parser.add_argument('--supervision', action='store_true',
+                        help="Whether use supervised models rather than \
+                        self-supervised ones")
     parser.add_argument('--model', type=str, default='mlp', help='model name')
     parser.add_argument('--kernel_num', type=int, default=9,
                         help='number of each kind of kernel')
