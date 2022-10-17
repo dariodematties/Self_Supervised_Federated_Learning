@@ -60,6 +60,7 @@ if __name__ == '__main__':
     #test_dataset = list(test_dataset)[:4096]
 
     # BUILD MODEL
+    # if args.rank==0:
     if args.supervision:
         # Supervised learning
         if args.model == 'cnn':
@@ -90,6 +91,52 @@ if __name__ == '__main__':
 
         else:
             exit('Error: unrecognized unsupervised model')
+
+
+
+
+
+
+
+
+
+
+    # copy weights
+    if args.rank==0:
+        global_weights = global_model.state_dict()
+    else:
+        global_weights = {}
+
+    if args.rank==0:
+        number_of_keys=len(global_weights.keys())
+    else:
+        number_of_keys=None
+
+    number_of_keys = comm.bcast(number_of_keys, root=0)
+
+    keys=[]
+    for key_number in range(number_of_keys):
+        if args.rank==0:
+            key=list(global_weights.keys())[key_number]
+        else:
+            key=None
+
+        keys.append(comm.bcast(key, root=0))
+        
+    # bcast_state_dict
+    global_weights = bcast_state_dict(comm, global_weights, keys, root=0)
+
+    # update global weights
+    global_model.load_state_dict(global_weights)
+
+
+
+
+
+
+
+
+
 
     # Set the model to train and send it to device.
     global_model.to(device)
