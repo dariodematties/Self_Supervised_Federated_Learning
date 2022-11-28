@@ -38,7 +38,7 @@ class LocalUpdate(object):
         else:
             # Self-Supervised learning
             self.criterion = nn.MSELoss().to(self.device)
-
+    
     def train_val_test(self, dataset, idxs):
         """
         Returns train, validation and test dataloaders for a given dataset
@@ -157,6 +157,32 @@ class LocalUpdate(object):
 
             accuracy = loss/total
         return accuracy, loss
+    
+    def process_samples(self, dataset, idxs, model):
+        dataloader = DataLoader(DatasetSplit(dataset, idxs), batch_size=int(len(idxs)/10), shuffle=False)
+
+        if self.args.supervision:
+            # Supervised learning
+            output_list = []
+            for batch_idx, (images, labels) in enumerate(dataloader):
+                images, labels = images.to(self.device), labels.to(self.device)
+
+                # Inference
+                outputs = model(images)
+                output_list.extend(outputs)
+
+        else:
+            # Self-Supervised learning
+
+            for batch_idx, (images, labels) in enumerate(dataloader):
+                images = images.to(self.device)
+
+                # Inference
+                outputs = model(images)
+                output_list.extend(outputs)
+
+        return output_list
+                
 
 
 def test_inference(args, model, test_dataset):

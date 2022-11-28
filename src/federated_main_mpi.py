@@ -21,126 +21,95 @@ from utils import get_dataset, average_weights, exp_details
 
 from mpi4py import MPI
 from mpi_communication import gather_weights, gather_losses, bcast_state_dict
+from rl_actions import SwapWeights, ShareWeights, ShareRepresentations
 
 if __name__ == '__main__':
+
+    # Set up MPI
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
 
+    # Set up timer
     start_time = time.time()
 
-    # define paths
+    # Define paths
     path_project = os.path.abspath('..')
     logger = SummaryWriter('../logs')
 
+    
+    # Parse, validate, and print arguments
     args = args_parser()
-    exp_details(args)
 
-    args.rank=rank
-    args.size=size
+    if args.supervision:
+        assert args.model in ["cnn", "mlp"]
+    else:
+        assert args.model in ["autoencoder"]
+    
+    exp_details(args)
+    
+    args.rank = rank
+    args.size = size
+    args.gpu = rank
 
     if args.rank == 0:
-        print('The size of the environment is {}' .format(args.size))
+        print(f'Environment size {args.size}')
+    print(f'[Rank {args.rank}] Checking in!')
 
-    print('Here rank {} saying hello!' .format(args.rank))
-
-    args.gpu=rank
     if args.gpu:
         torch.cuda.set_device(int(args.gpu))
 
-    # device = 'cuda:'+str(args.gpu) if args.gpu else 'cpu'
-    device = 'cuda:'+str(args.gpu) if torch.cuda.is_available() else 'cpu'
+    device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
 
-    print('From rank {} device is {} and gpu number is {}' .format(args.rank, device, args.gpu))
+    print(f'Rank {args.rank} checking in with device {device} and gpu number is {args.gpu}')
 
-    # load dataset and user groups
+    # Load dataset
     train_dataset, test_dataset, user_groups = get_dataset(args)
 
-    #train_dataset = list(train_dataset)[:4096]
-    #test_dataset = list(test_dataset)[:4096]
+    # train_dataset = list(train_dataset)[:4096]
+    # test_dataset = list(test_dataset)[:4096]
 
-    # BUILD MODEL
-    # if args.rank==0:
-    if args.supervision:
-        # Supervised learning
-        if args.model == 'cnn':
-            # Convolutional neural netork
-            if args.dataset == 'mnist':
-                global_model = CNNMnist(args=args)
-            elif args.dataset == 'fmnist':
-                global_model = CNNFashion_Mnist(args=args)
-            elif args.dataset == 'cifar':
-                global_model = CNNCifar(args=args)
+    
+    # Set up model
+    global_model = None
 
-        elif args.model == 'mlp':
-            # Multi-layer preceptron
-            img_size = train_dataset[0][0].shape
-            len_in = 1
-            for x in img_size:
-                len_in *= x
-                global_model = MLP(dim_in=len_in, dim_hidden=64,
-                                   dim_out=args.num_classes)
+    if args.rank == 0:
+        if args.supervision:
+            # Supervised learning
+            if args.model == 'cnn':
+                # Convolutional neural netork
+                if args.dataset == 'mnist':
+                    global_model = CNNMnist(args=args)
+                elif args.dataset == 'fmnist':
+                    global_model = CNNFashion_Mnist(args=args)
+                elif args.dataset == 'cifar':
+                    global_model = CNNCifar(args=args)
+
+            elif args.model == 'mlp':
+                # Multi-layer preceptron
+                img_size = train_dataset[0][0].shape
+                len_in = 1
+                for x in img_size:
+                    len_in *= x
+                    global_model = MLP(dim_in=len_in, dim_hidden=64,
+                                    dim_out=args.num_classes)
+            else:
+                exit('Error: unrecognized model')
         else:
-            exit('Error: unrecognized model')
-    else:
-        # Self supervised learning
-        if args.model == 'autoencoder':
-            # Transpose Convolution and Autoencoder
-            if args.dataset == 'mnist':
-                global_model = AutoencoderMNIST(args=args)
+            # Self supervised learning
+            if args.model == 'autoencoder':
+                # Transpose Convolution and Autoencoder
+                if args.dataset == 'mnist':
+                    global_model = AutoencoderMNIST(args=args)
 
-        else:
-            exit('Error: unrecognized unsupervised model')
+            else:
+                exit('Error: unrecognized unsupervised model')
 
-
-
-
-
-
-
-
-
-
-    # copy weights
-    if args.rank==0:
-        global_weights = global_model.state_dict()
-    else:
-        global_weights = {}
-
-    if args.rank==0:
-        number_of_keys=len(global_weights.keys())
-    else:
-        number_of_keys=None
-
-    number_of_keys = comm.bcast(number_of_keys, root=0)
-
-    keys=[]
-    for key_number in range(number_of_keys):
-        if args.rank==0:
-            key=list(global_weights.keys())[key_number]
-        else:
-            key=None
-
-        keys.append(comm.bcast(key, root=0))
-        
-    # bcast_state_dict
-    global_weights = bcast_state_dict(comm, global_weights, keys, root=0)
-
-    # update global weights
-    global_model.load_state_dict(global_weights)
-
-
-
-
-
-
-
-
-
-
-    # Set the model to train and send it to device.
+    # Broadcast global model
+    global_model = comm.bcast(global_model, root=0)
     global_model.to(device)
     global_model.train()
+    
 
     if args.rank == 0:
         print(global_model)
@@ -156,12 +125,54 @@ if __name__ == '__main__':
     val_loss_pre, counter = 0, 0
 
     for epoch in tqdm(range(args.epochs)):
+
         local_weights, local_losses = [], []
         # local_outputs = []
-        if args.rank==0:
-            print(f'\n | Global Training Round : {epoch+1} |\n')
 
-        global_model.train()
+        if args.rank == 0:
+            print(f'\n | Global Training Round : {epoch + 1} |\n')
+
+        # Action Phase
+            
+        # Decide on actions; here, rank 0 acts as RL agent
+        actions = []
+        if args.rank == 0:
+            # Add actions to list; something like: 
+            actions.append(SwapWeights(2, 3))
+            pass
+
+        # Broadcast actions
+        actions = comm.bcast(actions, root=0)
+
+
+        for action in actions:
+
+            if isinstance(action, SwapWeights):
+                src_idxs = user_groups[action.src]
+                user_groups[action.src] = user_groups[action.dest]
+                user_groups[action.dest] = src_idxs
+
+            elif isinstance(action, ShareRepresentations):
+                if args.rank == action.src:
+                    # Perform inference with process_samples; then send output representations via MPI
+                    # NOTE: Using global model to process samples for now, because local model does not exist
+                    local_model = LocalUpdate(args=args, dataset=train_dataset,
+                                          idxs=user_groups[idx], logger=logger)
+                    output_list = local_model.process_samples(train_dataset, action.indices, copy.deepcopy(global_model))
+                    comm.send(output_list, dest=action.dest, tag="ShareRepresentations")
+                if args.rank == action.dest:
+                    output_list = comm.recv(source=action.src, tag="ShareRepresentations")
+                    # Here, the destination node should train to match the representations. This can also be implemented via a new function in update.py, but it doesn't make sense right now since there is only the global model at this point.
+                    pass
+            
+            # NOTE: Sharing weights is redundant in the context of FedAvg, because we're sending out a global model each epoch anyway. However, it will make sense as a means to generate global agreement once we remove this, because the local weights will no longer be ephemeral.
+            if isinstance(action, ShareWeights):
+                # Send src local model weights to dest local model (these models do not currently exist, since we're sending out global models at the start of each epoch).
+                pass
+        
+
+        # User Selection & Local Training
+
         m = max(int(args.frac * args.num_users), 1)
         idxs_users = np.random.choice(range(args.num_users), m, replace=False)
 
@@ -187,33 +198,12 @@ if __name__ == '__main__':
 
         local_weights=gather_weights(comm, local_weights, args)
         local_losses=gather_losses(comm, local_losses, args)
-                    
+
         # update global weights
-        if args.rank==0:
+        global_weights = {}
+        if args.rank == 0:
             global_weights = average_weights(local_weights)
-        else:
-            global_weights = {}
-
-        if args.rank==0:
-            number_of_keys=len(global_weights.keys())
-        else:
-            number_of_keys=None
-
-        number_of_keys = comm.bcast(number_of_keys, root=0)
-
-        keys=[]
-        for key_number in range(number_of_keys):
-            if args.rank==0:
-                key=list(global_weights.keys())[key_number]
-            else:
-                key=None
-
-            keys.append(comm.bcast(key, root=0))
-            
-        # bcast_state_dict
-        global_weights = bcast_state_dict(comm, global_weights, keys, root=0)
- 
-        # update global weights
+        global_weights = comm.bcast(global_weights, root=0)
         global_model.load_state_dict(global_weights)
 
         if args.rank==0:
@@ -284,7 +274,7 @@ if __name__ == '__main__':
 
         print('\n Total Run Time: {0:0.4f}'.format(time.time()-start_time))
 
-        # PLOTTING (optional)
+        # PLIOTTNG (optional)
         import matplotlib
         import matplotlib.pyplot as plt
         matplotlib.use('Agg')
