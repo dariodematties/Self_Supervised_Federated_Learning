@@ -36,7 +36,6 @@ if __name__ == '__main__':
     # Define paths
     path_project = os.path.abspath('..')
     logger = SummaryWriter('../logs')
-
     
     # Parse, validate, and print arguments
     args = args_parser()
@@ -52,70 +51,60 @@ if __name__ == '__main__':
     args.size = size
     args.gpu = rank
 
-    if args.rank == 0:
-        print(f'Environment size {args.size}')
-    print(f'[Rank {args.rank}] Checking in!')
-
     if args.gpu:
         torch.cuda.set_device(int(args.gpu))
 
     device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
 
-    print(f'Rank {args.rank} checking in with device {device} and gpu number is {args.gpu}')
+    if args.rank == 0:
+        print(f'Environment size: {args.size}')
+
+    print(f'[Rank {args.rank}] Checking in with device {device} and GPU number {args.gpu}.')
 
     # Load dataset
     train_dataset, test_dataset, user_groups = get_dataset(args)
 
-    # train_dataset = list(train_dataset)[:4096]
-    # test_dataset = list(test_dataset)[:4096]
+    # Set up local models for each node
+    local_models = {}
+    for i in range(args.num_users):
+        if i % args.size == args.rank:
+            if args.supervision:
+                # Supervised learning
+                if args.model == 'cnn':
+                    # Convolutional neural netork
+                    if args.dataset == 'mnist':
+                        local_model = CNNMnist(args=args)
+                    elif args.dataset == 'fmnist':
+                        local_model = CNNFashion_Mnist(args=args)
+                    elif args.dataset == 'cifar':
+                        local_model = CNNCifar(args=args)
 
-    
-    # Set up model
-    global_model = None
+                elif args.model == 'mlp':
+                    # Multi-layer preceptron
+                    img_size = train_dataset[0][0].shape
+                    len_in = 1
+                    for x in img_size:
+                        len_in *= x
+                        local_model = MLP(dim_in=len_in, dim_hidden=64,
+                                        dim_out=args.num_classes)
+                else:
+                    exit('Error: unrecognized model')
+            else:
+                # Self-supervised learning
+                if args.model == 'autoencoder':
+                    # Autoencoder with transpose convolutions
+                    if args.dataset == 'mnist':
+                        local_model = AutoencoderMNIST(args=args)
+
+                else:
+                    exit('Error: unrecognized unsupervised model')
+
+            local_model.to(device)
+            local_model.train()
+            local_models[i] = local_model
 
     if args.rank == 0:
-        if args.supervision:
-            # Supervised learning
-            if args.model == 'cnn':
-                # Convolutional neural netork
-                if args.dataset == 'mnist':
-                    global_model = CNNMnist(args=args)
-                elif args.dataset == 'fmnist':
-                    global_model = CNNFashion_Mnist(args=args)
-                elif args.dataset == 'cifar':
-                    global_model = CNNCifar(args=args)
-
-            elif args.model == 'mlp':
-                # Multi-layer preceptron
-                img_size = train_dataset[0][0].shape
-                len_in = 1
-                for x in img_size:
-                    len_in *= x
-                    global_model = MLP(dim_in=len_in, dim_hidden=64,
-                                    dim_out=args.num_classes)
-            else:
-                exit('Error: unrecognized model')
-        else:
-            # Self supervised learning
-            if args.model == 'autoencoder':
-                # Transpose Convolution and Autoencoder
-                if args.dataset == 'mnist':
-                    global_model = AutoencoderMNIST(args=args)
-
-            else:
-                exit('Error: unrecognized unsupervised model')
-
-    # Broadcast global model
-    global_model = comm.bcast(global_model, root=0)
-    global_model.to(device)
-    global_model.train()
-    
-
-    if args.rank == 0:
-        print(global_model)
-
-    # copy weights
-    global_weights = global_model.state_dict()
+        print(local_models[0])
 
     # Training
     train_loss, train_accuracy = [], []
@@ -126,25 +115,27 @@ if __name__ == '__main__':
 
     for epoch in tqdm(range(args.epochs)):
 
-        local_weights, local_losses = [], []
-        # local_outputs = []
-
         if args.rank == 0:
             print(f'\n | Global Training Round : {epoch + 1} |\n')
 
-        # Action Phase
+        # [ACTIONS]
             
         # Decide on actions; here, rank 0 acts as RL agent
         actions = []
         if args.rank == 0:
             # Add actions to list; something like: 
             actions.append(SwapWeights(2, 3))
-            pass
-
+            actions.append(SwapWeights(7, 4))
+        
+        if args.rank == 0:
+            print("Actions Selected by RL Agent: ")
+            for action in actions:
+                print(action)
+        
         # Broadcast actions
         actions = comm.bcast(actions, root=0)
 
-
+        # Perform actions
         for action in actions:
 
             if isinstance(action, SwapWeights):
@@ -153,92 +144,86 @@ if __name__ == '__main__':
                 user_groups[action.dest] = src_idxs
 
             elif isinstance(action, ShareRepresentations):
-                if args.rank == action.src:
-                    # Perform inference with process_samples; then send output representations via MPI
-                    # NOTE: Using global model to process samples for now, because local model does not exist
-                    local_model = LocalUpdate(args=args, dataset=train_dataset,
+                if action.src % args.size == args.rank:
+                    local_update = LocalUpdate(args=args, dataset=train_dataset,
                                           idxs=user_groups[idx], logger=logger)
-                    output_list = local_model.process_samples(train_dataset, action.indices, copy.deepcopy(global_model))
-                    comm.send(output_list, dest=action.dest, tag="ShareRepresentations")
-                if args.rank == action.dest:
-                    output_list = comm.recv(source=action.src, tag="ShareRepresentations")
-                    # Here, the destination node should train to match the representations. This can also be implemented via a new function in update.py, but it doesn't make sense right now since there is only the global model at this point.
-                    pass
+                    output_list = local_update.process_samples(train_dataset, action.indices, local_models[action.src])
+                    comm.send(output_list, dest=action.dest % args.size, tag="ShareRepresentations")
+                if action.dest % args.size == args.rank:
+                    output_list = comm.recv(source=action.src % args.size, tag="ShareRepresentations")
+                    # TODO: Here, the destination node should train to match the representations. This can also be implemented via a new function in update.py.
             
-            # NOTE: Sharing weights is redundant in the context of FedAvg, because we're sending out a global model each epoch anyway. However, it will make sense as a means to generate global agreement once we remove this, because the local weights will no longer be ephemeral.
-            if isinstance(action, ShareWeights):
-                # Send src local model weights to dest local model (these models do not currently exist, since we're sending out global models at the start of each epoch).
-                pass
+            elif isinstance(action, ShareWeights):
+                if action.src % args.size == args.rank:
+                    local_weights = local_models[action.src].state_dict()
+                    comm.send(local_weights, dest=action.dest % args.size, tag="ShareWeights")
+                if action.dest % args.size == args.rank:
+                    shared_weights = comm.recv(source=action.src % args.size, tag="ShareWeights")
+                    local_models[action.src].load_state_dict(shared_weights)
+
+            else:
+                exit("Error: Undefined action")
         
 
-        # User Selection & Local Training
+        # [USER SELECTION]
 
         m = max(int(args.frac * args.num_users), 1)
         idxs_users = np.random.choice(range(args.num_users), m, replace=False)
 
-        for i in range(len(idxs_users)):
-            idx=idxs_users[i]
+        
+        # [LOCAL TRAINING]
 
-            if i%args.size==args.rank:
+        # local_weights, local_losses = [], []
+        # local_outputs = []
+
+        for idx in idxs_users:
+            if idx % args.size == args.rank:
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
                                           idxs=user_groups[idx], logger=logger)
                 if args.supervision:
                     # Supervised learning
                     w, loss = local_model.update_weights(
-                        model=copy.deepcopy(global_model), global_round=epoch)
-                    local_weights.append(copy.deepcopy(w))
-                    local_losses.append(copy.deepcopy(loss))
+                        model=local_models[idx], global_round=epoch)
+                    # local_weights.append(copy.deepcopy(w))
+                    # local_losses.append(copy.deepcopy(loss))
                 else:
-                    # Self-Supervised learning
+                    # Self-supervised learning
                     w, loss, out = local_model.update_weights(
-                            model=copy.deepcopy(global_model), global_round=epoch)
-                    local_weights.append(copy.deepcopy(w))
-                    local_losses.append(copy.deepcopy(loss))
-                    # local_outputs.append(out)
+                            model=local_models[idx], global_round=epoch)
+                    # local_weights.append(copy.deepcopy(w))
+                    # local_losses.append(copy.deepcopy(loss))
+                    # local_outputs.append(out) 
 
-        local_weights=gather_weights(comm, local_weights, args)
-        local_losses=gather_losses(comm, local_losses, args)
-
-        # update global weights
-        global_weights = {}
-        if args.rank == 0:
-            global_weights = average_weights(local_weights)
-        global_weights = comm.bcast(global_weights, root=0)
-        global_model.load_state_dict(global_weights)
-
-        if args.rank==0:
-            loss_avg = sum(local_losses) / len(local_losses)
-            train_loss.append(loss_avg)
-
-
-
-
-
-
-
+        # [EVALUATION]
+        # if args.rank == 0:
+        #     loss_avg = sum(local_losses) / len(local_losses)
+        #     train_loss.append(loss_avg)
 
         # Calculate avg training accuracy over all users at every epoch
         list_acc, list_loss = [], []
-        global_model.eval()
-        for i in range(len(idxs_users)):
-        # for c in range(args.num_users):
-            idx=idxs_users[i]
-
-            if i%args.size==args.rank:
+        for idx in idxs_users:
+            if idx % args.size == args.rank:
+                local_models[idx].eval()
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
                                           idxs=user_groups[idx], logger=logger)
-                acc, loss = local_model.inference(model=global_model)
+                acc, loss = local_model.inference(model=local_models[idx])
                 list_acc.append(acc)
                 list_loss.append(loss)
 
-        list_acc=gather_losses(comm, list_acc, args)
-        list_loss=gather_losses(comm, list_loss, args)
-        if args.rank==0:
-            train_accuracy.append(sum(list_acc)/len(list_acc))
+        # Gather accuracies and losses
+        list_acc_all = comm.gather(list_acc, root=0)
+        list_loss_all =  comm.gather(list_loss, root=0)
+        
+        if args.rank == 0:
+            # Flatten accuracies and losses
+            list_acc_all = [acc for list_acc in list_acc_all for acc in list_acc]
+            list_loss_all = [loss for list_loss in list_loss_all for loss in list_loss]
+            train_accuracy.append(sum(list_acc_all) / len(list_acc_all))
+            train_loss.append(sum(list_loss_all) / len(list_loss_all))
 
-        # print global training loss after every 'i' rounds
-        if args.rank==0:
-            if (epoch+1) % print_every == 0:
+        # Print global training loss after every 'i' rounds
+        if args.rank == 0:
+            if (epoch + 1) % print_every == 0:
                 print(f' \nAvg Training Stats after {epoch+1} global rounds:')
                 print(f'Training Loss : {np.mean(np.array(train_loss))}')
                 if args.supervision:
@@ -247,22 +232,38 @@ if __name__ == '__main__':
                     print('Train MSE: {:.8f} \n'.format(train_accuracy[-1]))
 
 
-
-
-
-
-
     # Test inference after completion of training
-    if args.rank==0:
-        test_acc, test_loss = test_inference(args, global_model, test_dataset)
 
+
+    # if args.rank == 0:
+    #     test_acc, test_loss = test_inference(args, global_model, test_dataset)
+
+    list_acc, list_loss = [], []
+    for idx in idxs_users:
+        if idx % args.size == args.rank:
+            acc, loss = test_inference(args, local_models[idx], test_dataset)
+            list_acc.append(acc)
+            list_loss.append(loss)
+
+    list_acc_all = comm.gather(list_acc, root=0)
+    list_loss_all = comm.gather(list_loss, root=0)
+    # list_acc = gather_losses(comm, list_acc, args)
+    # list_loss = gather_losses(comm, list_loss, args)
+    
+    if args.rank == 0:
+        list_acc_all = [acc for list_acc in list_acc_all for acc in list_acc]
+        list_loss_all = [loss for list_loss in list_loss_all for loss in list_loss]
+        test_accuracy = sum(list_acc_all) / len(list_acc_all)
+        test_loss = sum(list_loss_all) / len(list_loss_all)
+
+    if args.rank == 0:
         print(f' \n Results after {args.epochs} global rounds of training:')
         if args.supervision:
-            print("|---- Avg Train Accuracy: {:.2f}%".format(100*train_accuracy[-1]))
-            print("|---- Test Accuracy: {:.2f}%".format(100*test_acc))
+            print("|---- Avg Train Accuracy: {:.2f}%".format(100 * train_accuracy[-1]))
+            print("|---- Test Accuracy: {:.2f}%".format(100 * test_accuracy))
         else:
             print("|---- Avg Train MSE: {:.8f}".format(train_accuracy[-1]))
-            print("|---- Test MSE: {:.8f}".format(test_acc))
+            print("|---- Test MSE: {:.8f}".format(test_accuracy))
 
         # Saving the objects train_loss and train_accuracy:
         file_name = './save/objects/{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}].pkl'.\
