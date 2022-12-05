@@ -20,13 +20,12 @@ class DatasetSplit(Dataset):
 
     def __getitem__(self, item):
         image, label = self.dataset[self.idxs[item]]
-        return torch.tensor(image), torch.tensor(label)
+        return image, label
 
 
 class LocalUpdate(object):
-    def __init__(self, args, dataset, idxs, logger):
+    def __init__(self, args, dataset, idxs):
         self.args = args
-        self.logger = logger
         self.trainloader, self.validloader, self.testloader = self.train_val_test(
             dataset, list(idxs))
         self.device = 'cuda:'+str(args.gpu) if torch.cuda.is_available() else 'cpu'
@@ -85,10 +84,9 @@ class LocalUpdate(object):
 
                     if self.args.verbose and (batch_idx % 10 == 0):
                         print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            global_round, iter, batch_idx * len(images),
+                            global_round + 1, iter, batch_idx * len(images),
                             len(self.trainloader.dataset),
                             100. * batch_idx / len(self.trainloader), loss.item()))
-                    self.logger.add_scalar('loss', loss.item())
                     batch_loss.append(loss.item())
                 epoch_loss.append(sum(batch_loss)/len(batch_loss))
 
@@ -109,10 +107,9 @@ class LocalUpdate(object):
 
                     if self.args.verbose and (batch_idx % 10 == 0):
                         print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            global_round, iter, batch_idx * len(images),
+                            global_round + 1, iter, batch_idx * len(images),
                             len(self.trainloader.dataset),
                             100. * batch_idx / len(self.trainloader), loss.item()))
-                    self.logger.add_scalar('loss', loss.item())
                     batch_loss.append(loss.item())
                 epoch_loss.append(sum(batch_loss)/len(batch_loss))
                 Outputs.append((iter, images, outputs),)

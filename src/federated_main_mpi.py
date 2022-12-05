@@ -11,17 +11,18 @@ import numpy as np
 from tqdm import tqdm
 
 import torch
-from tensorboardX import SummaryWriter
 
 from options import args_parser
 from update import LocalUpdate, test_inference
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
-from utils import get_dataset, average_weights, exp_details
+from utils import get_dataset, exp_details, average_weights
 
 from mpi4py import MPI
 from mpi_communication import gather_weights, gather_losses, bcast_state_dict
 from rl_actions import SwapWeights, ShareWeights, ShareRepresentations
+
+import wandb
 
 if __name__ == '__main__':
 
@@ -35,7 +36,6 @@ if __name__ == '__main__':
 
     # Define paths
     path_project = os.path.abspath('..')
-    logger = SummaryWriter('../logs')
     
     # Parse, validate, and print arguments
     args = args_parser()
@@ -45,11 +45,9 @@ if __name__ == '__main__':
     else:
         assert args.model in ["autoencoder"]
     
-    exp_details(args)
-    
     args.rank = rank
     args.size = size
-    args.gpu = rank
+    args.gpu = rank        
 
     if args.gpu:
         torch.cuda.set_device(int(args.gpu))
@@ -57,6 +55,7 @@ if __name__ == '__main__':
     device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
 
     if args.rank == 0:
+        exp_details(args)
         print(f'Environment size: {args.size}')
 
     print(f'[Rank {args.rank}] Checking in with device {device} and GPU number {args.gpu}.')
@@ -66,6 +65,8 @@ if __name__ == '__main__':
 
     # Set up local models for each node
     local_models = {}
+    local_losses = {}
+
     for i in range(args.num_users):
         if i % args.size == args.rank:
             if args.supervision:
@@ -102,9 +103,15 @@ if __name__ == '__main__':
             local_model.to(device)
             local_model.train()
             local_models[i] = local_model
+            local_losses[i] = []
 
     if args.rank == 0:
+        print()
+        print("Model Information: ")
         print(local_models[0])
+        print()
+    
+    wandb.init(group="federated_mpi_experiment", config=vars(args))
 
     # Training
     train_loss, train_accuracy = [], []
@@ -113,25 +120,25 @@ if __name__ == '__main__':
     print_every = 2
     val_loss_pre, counter = 0, 0
 
-    for epoch in tqdm(range(args.epochs)):
+    if args.rank == 0:
+        pbar = tqdm(total=args.epochs)
 
-        if args.rank == 0:
-            print(f'\n | Global Training Round : {epoch + 1} |\n')
-
-        # [ACTIONS]
+    for epoch in range(args.epochs):
             
+        # [ACTIONS]  
         # Decide on actions; here, rank 0 acts as RL agent
         actions = []
         if args.rank == 0:
             # Add actions to list; something like: 
-            actions.append(SwapWeights(2, 3))
-            actions.append(SwapWeights(7, 4))
-        
-        if args.rank == 0:
-            print("Actions Selected by RL Agent: ")
-            for action in actions:
-                print(action)
-        
+            # actions.append(SwapWeights(2, 3))
+            # actions.append(SwapWeights(7, 4))
+            actions.append(ShareWeights(1, 2))
+            actions.append(ShareWeights(3, 4))
+            actions.append(ShareWeights(5, 6))
+            actions.append(ShareWeights(7, 8))
+            actions.append(ShareWeights(9, 10))
+            # pass
+
         # Broadcast actions
         actions = comm.bcast(actions, root=0)
 
@@ -146,54 +153,76 @@ if __name__ == '__main__':
             elif isinstance(action, ShareRepresentations):
                 if action.src % args.size == args.rank:
                     local_update = LocalUpdate(args=args, dataset=train_dataset,
-                                          idxs=user_groups[idx], logger=logger)
+                                          idxs=user_groups[idx])
                     output_list = local_update.process_samples(train_dataset, action.indices, local_models[action.src])
-                    comm.send(output_list, dest=action.dest % args.size, tag="ShareRepresentations")
+                    comm.Isend(output_list, dest=action.dest % args.size, tag=action.tag)
+
                 if action.dest % args.size == args.rank:
-                    output_list = comm.recv(source=action.src % args.size, tag="ShareRepresentations")
+                    output_list = comm.recv(source=action.src % args.size, tag=action.tag)
                     # TODO: Here, the destination node should train to match the representations. This can also be implemented via a new function in update.py.
             
             elif isinstance(action, ShareWeights):
+                
                 if action.src % args.size == args.rank:
-                    local_weights = local_models[action.src].state_dict()
-                    comm.send(local_weights, dest=action.dest % args.size, tag="ShareWeights")
+                    src_local_weights = local_models[action.src].state_dict()
+                    comm.isend(src_local_weights, dest=action.dest % args.size)
+
                 if action.dest % args.size == args.rank:
-                    shared_weights = comm.recv(source=action.src % args.size, tag="ShareWeights")
-                    local_models[action.src].load_state_dict(shared_weights)
+                    shared_weights = comm.recv(source=action.src % args.size)
+                    avg_weights = average_weights([local_models[action.dest].state_dict(), shared_weights])
+                    local_models[action.dest].load_state_dict(avg_weights)  
+
+                    dest_local_weights = local_models[action.src].state_dict()
+                    comm.isend(dest_local_weights, dest=action.src % args.size)                            
+
+                if action.src % args.size == args.rank:
+                    shared_weights = comm.recv(source=action.dest % args.size)
+                    avg_weights = average_weights([local_models[action.src].state_dict(), shared_weights])
+                    local_models[action.src].load_state_dict(avg_weights)
+
+            
 
             else:
                 exit("Error: Undefined action")
         
-
+        
         # [USER SELECTION]
-
         m = max(int(args.frac * args.num_users), 1)
         idxs_users = np.random.choice(range(args.num_users), m, replace=False)
 
-        
+        # [PRINT INFO]
+        if args.rank == 0:
+            print()
+            print()
+            print(f'| Global Training Round : {epoch + 1} |')
+            print()
+            print("Actions Selected by RL Agent: ")
+            if len(actions) == 0:
+                print("None")
+            else: 
+                for action in actions:
+                    print(action)
+            print()
+            print("Users Chosen: ")
+            print(idxs_users)
+            print()
+
         # [LOCAL TRAINING]
-
-        # local_weights, local_losses = [], []
-        # local_outputs = []
-
         for idx in idxs_users:
             if idx % args.size == args.rank:
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
-                                          idxs=user_groups[idx], logger=logger)
+                                          idxs=user_groups[idx])
                 if args.supervision:
                     # Supervised learning
                     w, loss = local_model.update_weights(
                         model=local_models[idx], global_round=epoch)
-                    # local_weights.append(copy.deepcopy(w))
-                    # local_losses.append(copy.deepcopy(loss))
                 else:
                     # Self-supervised learning
                     w, loss, out = local_model.update_weights(
                             model=local_models[idx], global_round=epoch)
-                    # local_weights.append(copy.deepcopy(w))
-                    # local_losses.append(copy.deepcopy(loss))
-                    # local_outputs.append(out) 
 
+                local_losses[idx].append(loss)
+            
         # [EVALUATION]
         # if args.rank == 0:
         #     loss_avg = sum(local_losses) / len(local_losses)
@@ -205,7 +234,7 @@ if __name__ == '__main__':
             if idx % args.size == args.rank:
                 local_models[idx].eval()
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
-                                          idxs=user_groups[idx], logger=logger)
+                                          idxs=user_groups[idx])
                 acc, loss = local_model.inference(model=local_models[idx])
                 list_acc.append(acc)
                 list_loss.append(loss)
@@ -230,10 +259,28 @@ if __name__ == '__main__':
                     print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
                 else:
                     print('Train MSE: {:.8f} \n'.format(train_accuracy[-1]))
+            print()
+            pbar.update(1)
+            print()
 
+    # wandb plotting
+    
+    data = [
+        [x, f"User {idx}", y] for idx, ys in local_losses.items() for (x, y) in zip(range(len(ys)), ys)
+    ]
+    
+    table = wandb.Table(data=data, columns=["step", "lineKey", "lineVal"])
+
+    plot = wandb.plot_table(
+        "srajani/fed-users",
+        table,
+        {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+    )
+
+    wandb.log({"loss_plot": plot})
+    
 
     # Test inference after completion of training
-
 
     # if args.rank == 0:
     #     test_acc, test_loss = test_inference(args, global_model, test_dataset)
@@ -275,30 +322,30 @@ if __name__ == '__main__':
 
         print('\n Total Run Time: {0:0.4f}'.format(time.time()-start_time))
 
-        # PLIOTTNG (optional)
-        import matplotlib
-        import matplotlib.pyplot as plt
-        matplotlib.use('Agg')
+        # PLOTTNG (optional)
+        # import matplotlib
+        # import matplotlib.pyplot as plt
+        # matplotlib.use('Agg')
 
         # Plot Loss curve
-        plt.figure()
-        plt.title('Training Loss vs Communication rounds')
-        plt.plot(range(len(train_loss)), train_loss, color='r')
-        plt.ylabel('Training loss')
-        plt.xlabel('Communication Rounds')
-        plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_loss.png'.
-                    format(args.dataset, args.model, args.epochs, args.frac,
-                           args.iid, args.local_ep, args.local_bs))
+        # plt.figure()
+        # plt.title('Training Loss vs Communication rounds')
+        # plt.plot(range(len(train_loss)), train_loss, color='r')
+        # plt.ylabel('Training loss')
+        # plt.xlabel('Communication Rounds')
+        # plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_loss.png'.
+        #             format(args.dataset, args.model, args.epochs, args.frac,
+        #                    args.iid, args.local_ep, args.local_bs))
         
         # Plot Average Accuracy vs Communication rounds
-        plt.figure()
-        plt.title('Average Accuracy vs Communication rounds')
-        plt.plot(range(len(train_accuracy)), train_accuracy, color='k')
-        plt.ylabel('Average Accuracy')
-        plt.xlabel('Communication Rounds')
-        plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_acc.png'.
-                    format(args.dataset, args.model, args.epochs, args.frac,
-                           args.iid, args.local_ep, args.local_bs))
+        # plt.figure()
+        # plt.title('Average Accuracy vs Communication rounds')
+        # plt.plot(range(len(train_accuracy)), train_accuracy, color='k')
+        # plt.ylabel('Average Accuracy')
+        # plt.xlabel('Communication Rounds')
+        # plt.savefig('./save/fed_{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}]_acc.png'.
+        #             format(args.dataset, args.model, args.epochs, args.frac,
+        #                    args.iid, args.local_ep, args.local_bs))
 
 
 

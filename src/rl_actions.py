@@ -27,10 +27,9 @@ class SwapWeights():
     return f"SwapWeights({self.src}, {self.dest})"
 
 class ShareWeights():
-  def __init__(self, src, dest, global_weights):
+  def __init__(self, src, dest):
     self.src = src
     self.dest = dest
-    self.global_weights = global_weights
   def __str__(self):
     return f"ShareWeights({self.src}, {self.dest})"
   
