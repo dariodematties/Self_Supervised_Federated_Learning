@@ -18,6 +18,9 @@ from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
 from utils import get_dataset, exp_details, average_weights
 
+import mpi4py
+mpi4py.rc.recv_mprobe = False
+
 from mpi4py import MPI
 from mpi_communication import gather_weights, gather_losses, bcast_state_dict
 from rl_actions import SwapWeights, ShareWeights, ShareRepresentations
@@ -65,7 +68,8 @@ if __name__ == '__main__':
 
     # Set up local models for each node
     local_models = {}
-    local_losses = {}
+    local_train_losses = {}
+    local_test_losses = {}
 
     for i in range(args.num_users):
         if i % args.size == args.rank:
@@ -103,18 +107,19 @@ if __name__ == '__main__':
             local_model.to(device)
             local_model.train()
             local_models[i] = local_model
-            local_losses[i] = []
+            local_train_losses[i] = []
+            local_test_losses[i] = []
 
     if args.rank == 0:
         print()
         print("Model Information: ")
         print(local_models[0])
         print()
-    
-    wandb.init(group="federated_mpi_experiment", config=vars(args))
+        wandb.init(group="federated_mpi_experiment", config=vars(args))
 
     # Training
     train_loss, train_accuracy = [], []
+    test_loss, test_accuracy = [], []
     val_acc_list, net_list = [], []
     cv_loss, cv_acc = [], []
     print_every = 2
@@ -129,15 +134,10 @@ if __name__ == '__main__':
         # Decide on actions; here, rank 0 acts as RL agent
         actions = []
         if args.rank == 0:
-            # Add actions to list; something like: 
-            # actions.append(SwapWeights(2, 3))
-            # actions.append(SwapWeights(7, 4))
-            actions.append(ShareWeights(1, 2))
-            actions.append(ShareWeights(3, 4))
-            actions.append(ShareWeights(5, 6))
-            actions.append(ShareWeights(7, 8))
-            actions.append(ShareWeights(9, 10))
-            # pass
+            if epoch % 10 == 0:
+                # Add actions to list; something like: 
+                actions.append(ShareWeights(1, 2))
+                # pass
 
         # Broadcast actions
         actions = comm.bcast(actions, root=0)
@@ -164,27 +164,29 @@ if __name__ == '__main__':
             elif isinstance(action, ShareWeights):
                 
                 if action.src % args.size == args.rank:
-                    src_local_weights = local_models[action.src].state_dict()
-                    comm.isend(src_local_weights, dest=action.dest % args.size)
+                    src_model = copy.deepcopy(local_models[action.src])
+                    comm.isend(src_model, dest=action.dest % args.size)
 
                 if action.dest % args.size == args.rank:
-                    shared_weights = comm.recv(source=action.src % args.size)
-                    avg_weights = average_weights([local_models[action.dest].state_dict(), shared_weights])
+                    dest_model = copy.deepcopy(local_models[action.dest])
+
+                    shared_src_model = comm.recv(source=action.src % args.size)
+                    shared_src_model.to(device)
+                    avg_weights = average_weights([local_models[action.dest].state_dict(), shared_src_model.state_dict()])
                     local_models[action.dest].load_state_dict(avg_weights)  
 
-                    dest_local_weights = local_models[action.src].state_dict()
-                    comm.isend(dest_local_weights, dest=action.src % args.size)                            
+                    comm.isend(dest_model, dest=action.src % args.size)                            
 
                 if action.src % args.size == args.rank:
-                    shared_weights = comm.recv(source=action.dest % args.size)
-                    avg_weights = average_weights([local_models[action.src].state_dict(), shared_weights])
+                    shared_dest_model = comm.recv(source=action.dest % args.size)
+                    shared_dest_model.to(device)
+                    avg_weights = average_weights([local_models[action.src].state_dict(), shared_dest_model.state_dict()])
                     local_models[action.src].load_state_dict(avg_weights)
-
-            
 
             else:
                 exit("Error: Undefined action")
         
+        comm.barrier()
         
         # [USER SELECTION]
         m = max(int(args.frac * args.num_users), 1)
@@ -221,96 +223,94 @@ if __name__ == '__main__':
                     w, loss, out = local_model.update_weights(
                             model=local_models[idx], global_round=epoch)
 
-                local_losses[idx].append(loss)
-            
-        # [EVALUATION]
-        # if args.rank == 0:
-        #     loss_avg = sum(local_losses) / len(local_losses)
-        #     train_loss.append(loss_avg)
+                local_train_losses[idx].append(loss)
 
-        # Calculate avg training accuracy over all users at every epoch
-        list_acc, list_loss = [], []
+        # [LOCAL TEST EVALUATION]
         for idx in idxs_users:
             if idx % args.size == args.rank:
-                local_models[idx].eval()
+                # this should perform inference, because LocalUpdate splits the passed dataset into train, validation, and test, and the inference() function operates on test data
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
                                           idxs=user_groups[idx])
-                acc, loss = local_model.inference(model=local_models[idx])
-                list_acc.append(acc)
-                list_loss.append(loss)
-
-        # Gather accuracies and losses
-        list_acc_all = comm.gather(list_acc, root=0)
-        list_loss_all =  comm.gather(list_loss, root=0)
+                acc, loss = local_model.inference(local_models[idx])
+                local_test_losses[idx].append(loss)
         
-        if args.rank == 0:
-            # Flatten accuracies and losses
-            list_acc_all = [acc for list_acc in list_acc_all for acc in list_acc]
-            list_loss_all = [loss for list_loss in list_loss_all for loss in list_loss]
-            train_accuracy.append(sum(list_acc_all) / len(list_acc_all))
-            train_loss.append(sum(list_loss_all) / len(list_loss_all))
 
-        # Print global training loss after every 'i' rounds
+        # Print training and evaluation loss after every 'i' rounds
+        if (epoch + 1) % print_every == 0:
+            last_train_losses = [local_train_loss[-1] for local_train_loss in local_train_losses.values() if len(local_train_loss) > 0]
+            last_test_losses = [local_test_loss[-1] for local_test_loss in local_test_losses.values() if len(local_test_loss) > 0]
+
+            last_train_losses_combined = comm.gather(last_train_losses, root=0)
+            last_test_losses_combined = comm.gather(last_test_losses, root=0)
+
+            if args.rank == 0:
+                
+                last_train_losses_combined = [loss for last_train_losses in last_train_losses_combined for loss in last_train_losses]
+                last_test_losses_combined = [loss for last_test_losses in last_test_losses_combined for loss in last_test_losses]
+
+                print(f'\nAvg Stats after {epoch + 1} global rounds:')
+                print(f'Avg. Local Training Loss: {sum(last_train_losses_combined) / len(last_train_losses_combined)}')
+                print(f'Avg. Local Testing Loss: {sum(last_test_losses_combined) / len(last_test_losses_combined)}')
+        
+        comm.barrier()
+
         if args.rank == 0:
-            if (epoch + 1) % print_every == 0:
-                print(f' \nAvg Training Stats after {epoch+1} global rounds:')
-                print(f'Training Loss : {np.mean(np.array(train_loss))}')
-                if args.supervision:
-                    print('Train Accuracy: {:.2f}% \n'.format(100*train_accuracy[-1]))
-                else:
-                    print('Train MSE: {:.8f} \n'.format(train_accuracy[-1]))
             print()
             pbar.update(1)
             print()
 
     # wandb plotting
-    
-    data = [
-        [x, f"User {idx}", y] for idx, ys in local_losses.items() for (x, y) in zip(range(len(ys)), ys)
-    ]
-    
-    table = wandb.Table(data=data, columns=["step", "lineKey", "lineVal"])
 
-    plot = wandb.plot_table(
-        "srajani/fed-users",
-        table,
-        {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
-    )
+    train_losses_combined = comm.gather(local_train_losses, root=0)
+    test_losses_combined = comm.gather(local_test_losses, root=0)
 
-    wandb.log({"loss_plot": plot})
+    if args.rank == 0:
+        
+        train_losses_combined = {idx: loss for local_train_losses in train_losses_combined for (idx, loss) in local_train_losses.items()}
+        test_losses_combined = {idx: loss for local_test_losses in test_losses_combined for (idx, loss) in local_test_losses.items()}
+    
+        train_loss_data = [
+            [x, f"User {idx}", y] for idx, ys in train_losses_combined.items() for (x, y) in zip(range(len(ys)), ys)
+        ]
+
+        test_loss_data = [
+            [x, f"User {idx}", y] for idx, ys in test_losses_combined.items() for (x, y) in zip(range(len(ys)), ys)
+        ]
+        
+        train_loss_table = wandb.Table(data=train_loss_data, columns=["step", "lineKey", "lineVal"])
+        test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
+
+        plot = wandb.plot_table(
+            "srajani/fed-users",
+            train_loss_table,
+            {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+            {"title": "Train Loss vs. Per-Node Local Training Round"}
+        )
+        wandb.log({"train_loss_plot": plot})
+
+        plot = wandb.plot_table(
+            "srajani/fed-users",
+            test_loss_table,
+            {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+            {"title": "Test Loss vs. Per-Node Local Training Round"}
+        )
+        wandb.log({"test_loss_plot": plot})
     
 
     # Test inference after completion of training
+    last_train_losses = [local_train_loss[-1] for local_train_loss in local_train_losses.values() if len(local_train_loss) > 0]
+    last_test_losses = [local_test_loss[-1] for local_test_loss in local_test_losses.values() if len(local_test_loss) > 0]
 
-    # if args.rank == 0:
-    #     test_acc, test_loss = test_inference(args, global_model, test_dataset)
-
-    list_acc, list_loss = [], []
-    for idx in idxs_users:
-        if idx % args.size == args.rank:
-            acc, loss = test_inference(args, local_models[idx], test_dataset)
-            list_acc.append(acc)
-            list_loss.append(loss)
-
-    list_acc_all = comm.gather(list_acc, root=0)
-    list_loss_all = comm.gather(list_loss, root=0)
-    # list_acc = gather_losses(comm, list_acc, args)
-    # list_loss = gather_losses(comm, list_loss, args)
-    
-    if args.rank == 0:
-        list_acc_all = [acc for list_acc in list_acc_all for acc in list_acc]
-        list_loss_all = [loss for list_loss in list_loss_all for loss in list_loss]
-        test_accuracy = sum(list_acc_all) / len(list_acc_all)
-        test_loss = sum(list_loss_all) / len(list_loss_all)
+    last_train_losses_combined = comm.gather(last_train_losses, root=0)
+    last_test_losses_combined = comm.gather(last_test_losses, root=0)
 
     if args.rank == 0:
+        last_train_losses_combined = [loss for last_train_losses in last_train_losses_combined for loss in last_train_losses]
+        last_test_losses_combined = [loss for last_test_losses in last_test_losses_combined for loss in last_test_losses]
+
         print(f' \n Results after {args.epochs} global rounds of training:')
-        if args.supervision:
-            print("|---- Avg Train Accuracy: {:.2f}%".format(100 * train_accuracy[-1]))
-            print("|---- Test Accuracy: {:.2f}%".format(100 * test_accuracy))
-        else:
-            print("|---- Avg Train MSE: {:.8f}".format(train_accuracy[-1]))
-            print("|---- Test MSE: {:.8f}".format(test_accuracy))
+        print(f'Avg. Local Training Loss: {sum(last_train_losses_combined) / len(last_train_losses_combined)}')
+        print(f'Avg. Local Testing Loss: {sum(last_test_losses_combined) / len(last_test_losses_combined)}')
 
         # Saving the objects train_loss and train_accuracy:
         file_name = './save/objects/{}_{}_{}_C[{}]_iid[{}]_E[{}]_B[{}].pkl'.\
