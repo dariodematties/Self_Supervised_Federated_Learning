@@ -13,16 +13,10 @@ from stable_baselines3.common.env_checker import check_env
 from options import args_parser
 from utils import exp_details
 
-from mpi4py import MPI
 from rl_environment import FedEnv
 from rl_local import LocalActions
 
 if __name__ == '__main__':
-
-    # Set up MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
 
     # Set up timer
     start_time = time.time()
@@ -37,28 +31,18 @@ if __name__ == '__main__':
         assert args.model in ["cnn", "mlp"]
     else:
         assert args.model in ["autoencoder"]
-    
-    args.comm = comm
-    args.rank = rank
-    args.size = size
-    args.gpu = rank        
 
     if args.gpu:
         torch.cuda.set_device(int(args.gpu))
 
     args.device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
 
-    if args.rank == 0:
-        exp_details(args)
-        print(f'Environment size: {args.size}')
-
-    print(f'[Rank {args.rank}] Checking in with device {args.device} and GPU number {args.gpu}.')
+    exp_details(args)
     
     local_actions = LocalActions(args)
 
     # Set Up RL Agent
-    env = FedEnv(args.num_users, args.frac, args.rank, args.size, args.comm, local_actions, args.epochs)
-    # env = gym.make('LunarLander-v2')
+    env = FedEnv(args.num_users, args.frac, local_actions, args.epochs)
     
     # check_env(env)
 
@@ -70,21 +54,19 @@ if __name__ == '__main__':
 
     model = PPO("MlpPolicy", env, verbose=1)
 
-    if args.rank == 0:
-        print("Beginning training.")
+    print("Beginning training.")
 
-    # model.learn(total_timesteps=1)
+    model.learn(total_timesteps=1)
 
     env.reset()
 
-    for _ in range(1000):
-        # Random action
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        if done:
-            obs = env.reset()
+    # for _ in range(1000):
+    #     # Random action
+    #     action = env.action_space.sample()
+    #     obs, reward, done, info = env.step(action)
+    #     if done:
+    #         obs = env.reset()
 
-    if args.rank == 0:
-        print("Finished training.")
+    print("Finished training.")
 
     model.save("FedRL")
