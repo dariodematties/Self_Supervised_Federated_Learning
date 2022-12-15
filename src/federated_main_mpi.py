@@ -19,11 +19,11 @@ from models import AutoencoderMNIST
 from utils import get_dataset, exp_details, average_weights
 
 import mpi4py
-mpi4py.rc.recv_mprobe = False
 
 from mpi4py import MPI
 from mpi_communication import gather_weights, gather_losses, bcast_state_dict
 from rl_actions import SwapWeights, ShareWeights, ShareRepresentations
+
 
 import wandb
 
@@ -129,15 +129,18 @@ if __name__ == '__main__':
         pbar = tqdm(total=args.epochs)
 
     for epoch in range(args.epochs):
-            
+        
+        # [USER SELECTION]
+        m = max(int(args.frac * args.num_users), 1)
+        idxs_users = np.random.choice(range(args.num_users), m, replace=False)
+
         # [ACTIONS]  
         # Decide on actions; here, rank 0 acts as RL agent
         actions = []
         if args.rank == 0:
-            if epoch % 10 == 0:
-                # Add actions to list; something like: 
-                actions.append(ShareWeights(1, 2))
-                # pass
+            # Add actions to list; something like: 
+            actions.append(ShareWeights(idxs_users[0], idxs_users[1]))
+            # pass
 
         # Broadcast actions
         actions = comm.bcast(actions, root=0)
@@ -187,10 +190,6 @@ if __name__ == '__main__':
                 exit("Error: Undefined action")
         
         comm.barrier()
-        
-        # [USER SELECTION]
-        m = max(int(args.frac * args.num_users), 1)
-        idxs_users = np.random.choice(range(args.num_users), m, replace=False)
 
         # [PRINT INFO]
         if args.rank == 0:
