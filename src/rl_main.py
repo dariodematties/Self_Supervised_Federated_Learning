@@ -61,7 +61,8 @@ if __name__ == '__main__':
         print("Finished training.")
 
         print("Beginning evaluation, with actions selected by policy network.")
-
+        env = FedEnv(args, 0)
+        obs = env.reset()
         for _ in range(1024):
             action, _ = model.predict(obs)
             obs, reward, done, info = env.step(action)
