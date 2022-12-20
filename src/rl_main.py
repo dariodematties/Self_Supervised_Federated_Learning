@@ -7,6 +7,8 @@ import time
 
 import torch
 import gym
+
+import stable_baselines3
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
@@ -14,7 +16,6 @@ from options import args_parser
 from utils import exp_details
 
 from rl_environment import FedEnv
-from rl_local import LocalActions
 
 if __name__ == '__main__':
 
@@ -38,35 +39,50 @@ if __name__ == '__main__':
     args.device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
 
     exp_details(args)
+
+    if args.method == "random":
+        print("Beginning evaluation, with actions taken at random.")
+        env = FedEnv(args, 0)
+        obs = env.reset()
+        for _ in range(1024):
+            action = env.action_space.sample()
+            obs, reward, done, info = env.step(action)
+            if done:
+                break
+        print("Finished evaluation.")
+
+    elif args.method == "rl":
+        print("Beginning policy network training with PPO.")
+        envs = [FedEnv(args, i) for i in range(args.n_gpus)]
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in range(args.n_gpus))
+        vec_env = stable_baselines3.common.vec_env.SubprocVecEnv(envs)
+        model = PPO("MlpPolicy", vec_env, verbose=1, n_steps=128)
+        model.learn(total_timesteps=512)
+        print("Finished training.")
+
+        print("Beginning evaluation, with actions selected by policy network.")
+
+        for _ in range(1024):
+            action, _ = model.predict(obs)
+            obs, reward, done, info = env.step(action)
+            if done:
+                break
+        print("Finished evaluation")
+
+    elif args.method == "fedavg":
+        print("Beginning evaluation, with FedAvg scheme.")
+        env = FedEnv(args, 0)
+        obs = env.reset()
+        for _ in range(1024):
+            # Perform DoNothing action
+            action = 0
+            obs, reward, done, info = env.step(action)
+            if done:
+                break
+        print("Finished evaluation.")
+
+    else:
+        print(f"Invalid method: '{args.method}'")
     
-    local_actions = LocalActions(args)
-
-    # Set Up RL Agent
-    env = FedEnv(args.num_users, args.frac, local_actions, args.epochs)
-    
-    # check_env(env)
-
-    # model = None
-    # if args.rank == 0:
-    #     model = PPO("MlpPolicy", env, verbose=1)
-
-    # model = comm.bcast(model, root=0)
-
-    model = PPO("MlpPolicy", env, verbose=1)
-
-    print("Beginning training.")
-
-    model.learn(total_timesteps=1)
-
-    env.reset()
-
-    # for _ in range(1000):
-    #     # Random action
-    #     action = env.action_space.sample()
-    #     obs, reward, done, info = env.step(action)
-    #     if done:
-    #         obs = env.reset()
-
-    print("Finished training.")
-
-    model.save("FedRL")
+    print("Saving model to save/FedRL")
+    model.save("save/FedRL")

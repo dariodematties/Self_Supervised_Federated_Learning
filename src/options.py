@@ -8,8 +8,13 @@ import argparse
 def args_parser():
     parser = argparse.ArgumentParser()
 
+    # reinforcement arguments
+    parser.add_argument('--method', type=str, choices=['fedavg', 'random', 'rl'],
+                        required=True, help='Whether to select actions randomly,\
+                        learn the actions using an RL agent, or use FedAvg.')
+
     # federated arguments (Notation for the arguments followed from paper)
-    parser.add_argument('--epochs', type=int, default=10,
+    parser.add_argument('--epochs', type=int, default=5,
                         help="number of rounds of training")
     parser.add_argument('--num_users', type=int, default=100,
                         help="number of users: K")
@@ -52,6 +57,8 @@ def args_parser():
                         of classes")
     parser.add_argument('--gpu', default=None, help="To use cuda, set \
                         to a specific GPU ID. Default set to use CPU.")
+    parser.add_argument('--n-gpus', default=1, help="The number of GPUs to use \
+                        for training.")
     parser.add_argument('--optimizer', type=str, default='sgd', help="type \
                         of optimizer")
     parser.add_argument('--iid', type=int, default=1,
@@ -63,5 +70,6 @@ def args_parser():
                         help='rounds of early stopping')
     parser.add_argument('--verbose', type=int, default=1, help='verbose')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    
     args = parser.parse_args()
     return args

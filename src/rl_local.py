@@ -2,27 +2,14 @@
 # -*- coding: utf-8 -*-
 # Python version: 3.6
 
-import os
 import copy
-import time
-import pickle
-import numpy as np
-from tqdm import tqdm
-import mpi4py
 
-import torch
 import wandb
 
-from options import args_parser
-from update import LocalUpdate, test_inference
+from update import LocalUpdate
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
-from utils import get_dataset, exp_details, average_weights
-
-from mpi4py import MPI
-from mpi_communication import gather_weights, gather_losses, bcast_state_dict
-from rl_actions import SwapWeights, ShareWeights, ShareRepresentations
-from rl_environment import FedEnv
+from utils import get_dataset, average_weights
 
 class LocalActions():
 
@@ -83,23 +70,61 @@ class LocalActions():
         print()
         wandb.init(group="federated_mpi_experiment", config=vars(args))
 
-    # DEFINE NECESSARY FUNCTIONS FOR LOCAL TRAINING, LOCAL EVALUATION, AND ALL ACTIONS
-
-    # Functions for ShareWeights
-
     def share_weights(self, src, dest):
-        src_model = copy.deepcopy(self.local_models[src])
-        dest_model = copy.deepcopy(self.local_models[dest])
+        """
+        Average the weights between the models of two users.
 
+        Parameters
+        ----------
+            src : int
+                the index of the source user
+            dest : int
+                the index of the destination user
+        """
+        # Get the models for the source and destination users
+        src_model = self.local_models[src]
+        dest_model = self.local_models[dest]
+
+        # Compute the average weights of the two models
         avg_weights = average_weights([src_model.state_dict(), dest_model.state_dict()])
 
+        # Load the average weights into the models for the source and destination users
         self.local_models[src].load_state_dict(avg_weights)  
         self.local_models[dest].load_state_dict(avg_weights) 
 
+    def average_all_weights(self, idxs_users):
+        """
+        Average the weights between idxs_users, and set all of the local models to have these weights.
+
+        Parameters
+        ----------
+            idxs_users : list
+                the indices of the current users selected for training
+        """
+        # Compute the average weights of the all models for idxs_users
+        avg_weights = average_weights([model.state_dict() for idx, model in self.local_models.items() if idx in idxs_users])
+
+        # Load the average weights into all of the models
+        for model in self.local_models:
+            model.load_state_dict(avg_weights)
+
     def local_training(self, idxs_users, epoch):
+        """
+        Perform local training for the specified users.
+
+        Parameters
+        ----------
+        idxs_users: list
+            a list of user indices for which to perform local training
+        epoch: int
+            the current global training round
+        """
         for idx in idxs_users:
+            # Create a LocalUpdate object for the current user
             local_model = LocalUpdate(args=self.args, dataset=self.train_dataset,
                                         idxs=self.user_groups[idx])
+
+            # Perform local training for the current user
             if self.args.supervision:
                 # Supervised learning
                 w, loss = local_model.update_weights(
@@ -109,51 +134,58 @@ class LocalActions():
                 w, loss, out = local_model.update_weights(
                         model=self.local_models[idx], global_round=epoch)
 
+            # Save the training loss for the current user
             self.local_train_losses[idx].append(loss)
 
     def local_evaluation(self, idxs_users):
+        """
+        Perform local evaluation for the specified users.
+
+        Parameters
+        ----------
+        idxs_users: list
+            a list of user indices for which to perform local evaluation
+
+        Returns
+        -------
+        current_losses: dict
+            a dictionary mapping user indices to their current test losses
+        """
         current_losses = {}
         for idx in idxs_users:
-            # this should perform inference, because LocalUpdate splits the passed dataset into train, validation, and test, and the inference() function operates on test data
+            # Create a LocalUpdate object for the current user
             local_model = LocalUpdate(args=self.args, dataset=self.train_dataset,
                                         idxs=self.user_groups[idx])
+            # Perform local evaluation for the current user
             acc, loss = local_model.inference(self.local_models[idx])
             self.local_test_losses[idx].append(loss)
             current_losses[idx] = loss
         return current_losses
 
-    # def plot_losses(self):
-    #     train_losses_combined = self.comm.gather(self.local_train_losses, root=0)
-    #     test_losses_combined = self.comm.gather(self.local_test_losses, root=0)
+    def plot_local_losses(self):
+        train_loss_data = [
+            [x, f"User {idx}", y] for idx, ys in self.local_train_losses.items() for (x, y) in zip(range(len(ys)), ys)
+        ]
 
-    #     if self.rank == 0:
-            
-    #         train_losses_combined = {idx: loss for local_train_losses in train_losses_combined for (idx, loss) in local_train_losses.items()}
-    #         test_losses_combined = {idx: loss for local_test_losses in test_losses_combined for (idx, loss) in local_test_losses.items()}
+        test_loss_data = [
+            [x, f"User {idx}", y] for idx, ys in self.local_test_losses.items() for (x, y) in zip(range(len(ys)), ys)
+        ]
         
-    #         train_loss_data = [
-    #             [x, f"User {idx}", y] for idx, ys in train_losses_combined.items() for (x, y) in zip(range(len(ys)), ys)
-    #         ]
+        train_loss_table = wandb.Table(data=train_loss_data, columns=["step", "lineKey", "lineVal"])
+        test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
 
-    #         test_loss_data = [
-    #             [x, f"User {idx}", y] for idx, ys in test_losses_combined.items() for (x, y) in zip(range(len(ys)), ys)
-    #         ]
-            
-    #         train_loss_table = wandb.Table(data=train_loss_data, columns=["step", "lineKey", "lineVal"])
-    #         test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
+        plot = wandb.plot_table(
+            "srajani/fed-users",
+            train_loss_table,
+            {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+            {"title": "Train Loss vs. Per-Node Local Training Round"}
+        )
+        wandb.log({"train_loss_plot": plot})
 
-    #         plot = wandb.plot_table(
-    #             "srajani/fed-users",
-    #             train_loss_table,
-    #             {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
-    #             {"title": "Train Loss vs. Per-Node Local Training Round"}
-    #         )
-    #         wandb.log({"train_loss_plot": plot})
-
-    #         plot = wandb.plot_table(
-    #             "srajani/fed-users",
-    #             test_loss_table,
-    #             {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
-    #             {"title": "Test Loss vs. Per-Node Local Training Round"}
-    #         )
-    #         wandb.log({"test_loss_plot": plot})
+        plot = wandb.plot_table(
+            "srajani/fed-users",
+            test_loss_table,
+            {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+            {"title": "Test Loss vs. Per-Node Local Training Round"}
+        )
+        wandb.log({"test_loss_plot": plot})
