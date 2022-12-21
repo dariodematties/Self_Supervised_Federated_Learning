@@ -12,6 +12,9 @@ def args_parser():
     parser.add_argument('--method', type=str, choices=['fedavg', 'random', 'rl'],
                         required=True, help='Whether to select actions randomly,\
                         learn the actions using an RL agent, or use FedAvg.')
+    parser.add_argument('--dummy_environment', action='store_true',
+                        help="Whether to use a dummy environment for testing \
+                        (no actions or local training)")
 
     # federated arguments (Notation for the arguments followed from paper)
     parser.add_argument('--epochs', type=int, default=5,

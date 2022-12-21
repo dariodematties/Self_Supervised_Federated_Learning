@@ -10,12 +10,11 @@ import gym
 
 import stable_baselines3
 from stable_baselines3 import PPO
-from stable_baselines3.common.env_checker import check_env
+
+from rl_environment import FedEnv
 
 from options import args_parser
 from utils import exp_details
-
-from rl_environment import FedEnv
 
 if __name__ == '__main__':
 
@@ -53,12 +52,14 @@ if __name__ == '__main__':
 
     elif args.method == "rl":
         print("Beginning policy network training with PPO.")
-        envs = [FedEnv(args, i) for i in range(args.n_gpus)]
+        envs = [lambda: FedEnv(args, i) for i in range(args.n_gpus)]
         os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in range(args.n_gpus))
         vec_env = stable_baselines3.common.vec_env.SubprocVecEnv(envs)
         model = PPO("MlpPolicy", vec_env, verbose=1, n_steps=128)
         model.learn(total_timesteps=512)
         print("Finished training.")
+        print("Saving model to save/FedRL")
+        model.save("save/FedRL")
 
         print("Beginning evaluation, with actions selected by policy network.")
         env = FedEnv(args, 0)
@@ -84,6 +85,3 @@ if __name__ == '__main__':
 
     else:
         print(f"Invalid method: '{args.method}'")
-    
-    print("Saving model to save/FedRL")
-    model.save("save/FedRL")

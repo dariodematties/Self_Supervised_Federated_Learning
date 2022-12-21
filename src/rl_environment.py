@@ -32,6 +32,7 @@ class FedEnv(gym.Env):
         self.method = args.method
         self.num_users = args.num_users
         self.frac = args.frac
+        self.dummy_environment = args.dummy_environment
 
         
     def get_losses(self):
@@ -68,69 +69,91 @@ class FedEnv(gym.Env):
             Additional information about the environment.
         """
 
-        # Compute the losses before the action was taken
-        pre_action_losses = self.get_losses()
+        # Handle dummy environment
+        # if self.dummy_environment:
+        #     observation, reward, done, info = np.array([0, 0, 0]), 0, False, {}
+        #     if not self.update_users():
+        #         self.epoch += 1
+        #         if (self.epoch == self.epochs):
+        #             print(f"[RL Environment] Finished {self.epochs} epochs")
+        #             done = True
+        #     return observation, reward, done, info
 
         # Get source and destination nodes
         current_src = self.idxs_users[self.usr_1]
         current_dest = self.idxs_users[self.usr_2]
+        
+        observation, reward, done, info = None, 0, False, {}
 
-        # If the action is 0, do nothing
-        
-        # If the action is 1, share the weights between the current source and destination users
-        if action == 1:
-            self.local_actions.share_weights(current_src, current_dest)
-        
-        # Compute the losses after action is taken
-        post_action_losses = self.get_losses()
-        post_action_loss_avg = sum(post_action_losses.values()) / len(post_action_losses.values())
-        
-        observation, reward, done, info = None, None, False, {}
+        if not self.dummy_environment:
+            # Compute the losses before the action was taken
+            pre_action_losses = self.get_losses()
 
-        # Calculate the reward as the difference between the sum of the losses before and after the action was taken
-        post_action_loss_sum = post_action_losses[self.idxs_users[self.usr_1]] + post_action_losses[self.idxs_users[self.usr_2]]
-        
-        pre_action_loss_sum = pre_action_losses[self.idxs_users[self.usr_1]] + pre_action_losses[self.idxs_users[self.usr_2]]
+            # If the action is 0, do nothing
+            
+            # If the action is 1, share the weights between the current source and destination users
+            if action == 1:
+                self.local_actions.share_weights(current_src, current_dest)
+            
+            # Compute the losses after action is taken
+            post_action_losses = self.get_losses()
+            post_action_loss_avg = sum(post_action_losses.values()) / len(post_action_losses.values())
 
-        reward = pre_action_loss_sum - post_action_loss_sum
+            # Calculate the reward as the difference between the sum of the losses before and after the action was taken
+            post_action_loss_sum = post_action_losses[self.idxs_users[self.usr_1]] + post_action_losses[self.idxs_users[self.usr_2]]
+            
+            pre_action_loss_sum = pre_action_losses[self.idxs_users[self.usr_1]] + pre_action_losses[self.idxs_users[self.usr_2]]
+
+            reward = pre_action_loss_sum - post_action_loss_sum
         
         # Print out some information about the step taken
         print(f"[RL Environment] Source: {current_src}, Destination: {current_dest}, Action: {action}, Reward: {reward}")
         
         # If not all of the pairs in idxs_users have been exhausted, update the users
-        if self.update_users():        
-            observation = np.array([
-                post_action_losses[self.idxs_users[self.usr_1]],
-                post_action_losses[self.idxs_users[self.usr_2]],
-                post_action_loss_avg
-            ])
+        if self.update_users():
+            if self.dummy_environment:
+                observation = np.array([0, 0, 0])      
+            else:
+                observation = np.array([
+                    post_action_losses[self.idxs_users[self.usr_1]],
+                    post_action_losses[self.idxs_users[self.usr_2]],
+                    post_action_loss_avg
+                ])
         
         # Otherwise, perform local training and sample new users
         else:
             print("[RL Environment] Performing local training")
-            self.local_actions.local_training(self.idxs_users, self.epoch)
-            if self.method == "fedavg":
-                print("[RL Environment] Averaging weights")
-                self.local_actions.average_all_weights()
+
+            if not self.dummy_environment:
+                self.local_actions.local_training(self.idxs_users, self.epoch)
+                if self.method == "fedavg":
+                    print("[RL Environment] Averaging weights")
+                    self.local_actions.average_all_weights(self.idxs_users)
             self.epoch += 1
+
             if (self.epoch == self.epochs):
                 print(f"[RL Environment] Finished {self.epochs} epochs")
                 done = True
-                self.local_actions.plot_local_losses()
+                if not self.dummy_environment:
+                    self.local_actions.plot_local_losses()
 
             self.sample_users()
 
-            new_losses = self.get_losses()
-            new_loss_avg = sum(new_losses.values()) / len(new_losses.values())
+            if self.dummy_environment:
+                observation = np.array([0, 0, 0])
+            else:
+                new_losses = self.get_losses()
+                new_loss_avg = sum(new_losses.values()) / len(new_losses.values())
 
-            observation = np.array([
-                new_losses[self.idxs_users[self.usr_1]],
-                new_losses[self.idxs_users[self.usr_2]],
-                new_loss_avg
-            ])     
+                observation = np.array([
+                    new_losses[self.idxs_users[self.usr_1]],
+                    new_losses[self.idxs_users[self.usr_2]],
+                    new_loss_avg
+                ])     
             
         return observation, reward, done, info
     
+
     def update_users(self):
         """Update the current source and destination users.
 

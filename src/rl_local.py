@@ -70,6 +70,7 @@ class LocalActions():
         print()
         wandb.init(group="federated_mpi_experiment", config=vars(args))
 
+
     def share_weights(self, src, dest):
         """
         Average the weights between the models of two users.
@@ -92,6 +93,7 @@ class LocalActions():
         self.local_models[src].load_state_dict(avg_weights)  
         self.local_models[dest].load_state_dict(avg_weights) 
 
+
     def average_all_weights(self, idxs_users):
         """
         Average the weights between idxs_users, and set all of the local models to have these weights.
@@ -105,8 +107,9 @@ class LocalActions():
         avg_weights = average_weights([model.state_dict() for idx, model in self.local_models.items() if idx in idxs_users])
 
         # Load the average weights into all of the models
-        for model in self.local_models:
+        for model in self.local_models.values():
             model.load_state_dict(avg_weights)
+
 
     def local_training(self, idxs_users, epoch):
         """
@@ -137,6 +140,7 @@ class LocalActions():
             # Save the training loss for the current user
             self.local_train_losses[idx].append(loss)
 
+
     def local_evaluation(self, idxs_users):
         """
         Perform local evaluation for the specified users.
@@ -161,6 +165,7 @@ class LocalActions():
             self.local_test_losses[idx].append(loss)
             current_losses[idx] = loss
         return current_losses
+
 
     def plot_local_losses(self):
         train_loss_data = [
