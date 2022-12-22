@@ -4,6 +4,10 @@
 
 import copy
 
+import torch
+
+import multiprocessing
+
 import wandb
 
 from update import LocalUpdate
@@ -14,6 +18,8 @@ from utils import get_dataset, average_weights
 class LocalActions():
 
     def __init__(self, args):
+
+        multiprocessing.set_start_method("spawn")
         
         self.args = args
         self.device = args.device
@@ -58,7 +64,7 @@ class LocalActions():
                 else:
                     exit('Error: unrecognized unsupervised model')
 
-            local_model.to(self.device)
+            local_model.to(i % self.args.n_gpus)
             local_model.train()
             self.local_models[i] = local_model
             self.local_train_losses[i] = []
@@ -113,7 +119,7 @@ class LocalActions():
 
     def local_training(self, idxs_users, epoch):
         """
-        Perform local training for the specified users.
+        Perform local training for the specified users, evenly split across separate GPUs.
 
         Parameters
         ----------
@@ -122,6 +128,25 @@ class LocalActions():
         epoch: int
             the current global training round
         """
+
+        torch.multiprocessing.spawn(self.single_gpu_local_training, (idxs_users, epoch), self.args.n_gpus, True)
+    
+
+    def single_gpu_local_training(self, rank, idxs_users, epoch):
+        """
+        Perform local training for the specified users on GPU i. This function will handle some portion of idxs_users for GPU i, depending on how many total GPUs are available.
+
+        Parameters
+        ----------
+        rank: int
+            the rank of the GPU to use for training
+        idxs_users: list
+            a list of user indices for which to perform local training
+        epoch: int
+            the current global training round
+        """
+        idxs_users = [idx_user for idx_user in idxs_users if idx_user % self.args.n_gpus == rank]
+
         for idx in idxs_users:
             # Create a LocalUpdate object for the current user
             local_model = LocalUpdate(args=self.args, dataset=self.train_dataset,
@@ -140,31 +165,63 @@ class LocalActions():
             # Save the training loss for the current user
             self.local_train_losses[idx].append(loss)
 
-
     def local_evaluation(self, idxs_users):
         """
-        Perform local evaluation for the specified users.
+        Perform local evaluation for the specified users, evenly split across separate GPUs.
 
         Parameters
         ----------
         idxs_users: list
             a list of user indices for which to perform local evaluation
-
         Returns
         -------
         current_losses: dict
             a dictionary mapping user indices to their current test losses
         """
+
+        queue = torch.multiprocessing.Queue()
+        torch.multiprocessing.spawn(self.single_gpu_local_evaluation, (idxs_users, queue), self.args.n_gpus, True)
         current_losses = {}
-        for idx in idxs_users:
+        while not queue.empty():
+            current_losses.update(queue.get())
+        queue.close()
+        return current_losses
+
+
+    def single_gpu_local_evaluation(self, rank, idxs_users, queue):
+        """
+        Perform local training for the specified users on GPU rank. This function will handle some portion of idxs_users for GPU rank, depending on how many total GPUs are available.
+
+        Parameters
+        ----------
+        rank: int
+            the rank of the GPU to use for evaluation
+        idxs_users: list
+            a list of user indices for which to perform local evaluation
+        queue: multiprocessing queue
+            used to aggregate return values
+        """
+
+        my_idxs_users = [idx_user for idx_user in idxs_users if idx_user % self.args.n_gpus == rank]
+
+        current_losses = {}
+
+        for idx in my_idxs_users:
+            print(f"Local evaluation on rank {rank} and user {idx}.")
+            
+            args = self.args
+            args.gpu = rank
+
             # Create a LocalUpdate object for the current user
-            local_model = LocalUpdate(args=self.args, dataset=self.train_dataset,
+            local_model = LocalUpdate(args=args, dataset=self.train_dataset,
                                         idxs=self.user_groups[idx])
+
             # Perform local evaluation for the current user
             acc, loss = local_model.inference(self.local_models[idx])
             self.local_test_losses[idx].append(loss)
             current_losses[idx] = loss
-        return current_losses
+
+        queue.put(current_losses)
 
 
     def plot_local_losses(self):
