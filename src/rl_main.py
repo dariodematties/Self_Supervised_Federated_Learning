@@ -52,13 +52,10 @@ if __name__ == '__main__':
 
     elif args.method == "rl":
         print("Beginning policy network training with PPO.")
-        # envs = [lambda: FedEnv(args, i) for i in range(args.n_gpus)]
-        # os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in range(args.n_gpus))
-        # vec_env = stable_baselines3.common.vec_env.SubprocVecEnv(envs)
-        # model = PPO("MlpPolicy", vec_env, verbose=1, n_steps=128)
-        env = FedEnv(args, 0)
+        # save_loss is set to False during training
+        env = FedEnv(args, 0, save_loss=False)
         model = PPO("MlpPolicy", env, verbose=1, n_steps=128)
-        model.learn(total_timesteps=512)
+        model.learn(total_timesteps=1024)
         print("Finished training.")
         print("Saving model to save/FedRL")
         model.save("save/FedRL")
