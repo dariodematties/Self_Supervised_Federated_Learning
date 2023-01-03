@@ -9,12 +9,24 @@ def args_parser():
     parser = argparse.ArgumentParser()
 
     # reinforcement arguments
-    parser.add_argument('--method', type=str, choices=['fedavg', 'random', 'rl'],
+    parser.add_argument('--method', type=str, choices=['fed_avg', 'fed_random', 'fed_rl', 'all'],
                         required=True, help='Whether to select actions randomly,\
-                        learn the actions using an RL agent, or use FedAvg.')
+                        learn the actions using an RL agent, use FedAvg, or evaluate \
+                        all three methods.')
     parser.add_argument('--dummy_environment', action='store_true',
                         help="Whether to use a dummy environment for testing \
                         (no actions or local training)")
+    parser.add_argument('--ppo_n_steps', type=int, default=64, help="n_steps parameter \
+                        for PPO algorithm; determines number of steps before policy \
+                        network receives a gradient update")
+    parser.add_argument('--ppo_lr', type=float, default=0.0003, help="learning rate\
+                        for PPO algorithm.")
+    parser.add_argument('--ppo_gamma', type=float, default=0.99, help="discount factor\
+                        for PPO algorithm.")
+    parser.add_argument('--ppo_bs', type=int, default=16, help="batch size\
+                        for PPO algorithm.")
+    parser.add_argument('--rl_episodes', type=int, default=10, help="number of \
+                        episodes to train RL agent for.")
 
     # federated arguments (Notation for the arguments followed from paper)
     parser.add_argument('--epochs', type=int, default=5,

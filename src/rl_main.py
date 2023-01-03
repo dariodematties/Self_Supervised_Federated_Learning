@@ -16,6 +16,50 @@ from rl_environment import FedEnv
 from options import args_parser
 from utils import exp_details
 
+def evaluate_rl(args):
+    print("Beginning policy network training with PPO.")
+    # save_loss is set to False during training; save_rewards is set to True
+    env = FedEnv(args=args, device=0, method="fed_rl", save_loss=False, save_rewards=True)
+    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr)
+    train_steps = args.rl_episodes * args.epochs * (args.num_users * args.frac) ** 2
+    model.learn(total_timesteps=train_steps)
+    print("Finished training.")
+    print("Saving model to save/FedRL")
+    model.save("save/FedRL")
+
+    print("Beginning evaluation, with actions selected by policy network.")
+    env = FedEnv(args=args, device=0, method="fed_rl")
+    obs = env.reset()
+    done = False
+    while not done:
+        action, _ = model.predict(obs)
+        obs, reward, done, info = env.step(action)
+    print("Finished evaluation")
+
+
+def evaluate_random(args):
+    print("Beginning evaluation, with actions taken at random.")
+    env = FedEnv(args=args, device=0, method="fed_random")
+    obs = env.reset()
+    done = False
+    while not done:
+        action = env.action_space.sample()
+        obs, reward, done, info = env.step(action)
+    print("Finished evaluation.")
+
+
+def evaluate_avg(args):
+    print("Beginning evaluation, with FedAvg scheme.")
+    env = FedEnv(args=args, device=0, method="fed_avg")
+    obs = env.reset()
+    done = False
+    while not done:
+        # Perform DoNothing action
+        action = 0
+        obs, reward, done, info = env.step(action)
+    print("Finished evaluation.")
+
+
 if __name__ == '__main__':
 
     # Set up timer
@@ -39,48 +83,9 @@ if __name__ == '__main__':
 
     exp_details(args)
 
-    if args.method == "random":
-        print("Beginning evaluation, with actions taken at random.")
-        env = FedEnv(args, 0)
-        obs = env.reset()
-        for _ in range(1024):
-            action = env.action_space.sample()
-            obs, reward, done, info = env.step(action)
-            if done:
-                break
-        print("Finished evaluation.")
-
-    elif args.method == "rl":
-        print("Beginning policy network training with PPO.")
-        # save_loss is set to False during training
-        env = FedEnv(args, 0, save_loss=False)
-        model = PPO("MlpPolicy", env, verbose=1, n_steps=128)
-        model.learn(total_timesteps=1024)
-        print("Finished training.")
-        print("Saving model to save/FedRL")
-        model.save("save/FedRL")
-
-        print("Beginning evaluation, with actions selected by policy network.")
-        env = FedEnv(args, 0)
-        obs = env.reset()
-        for _ in range(1024):
-            action, _ = model.predict(obs)
-            obs, reward, done, info = env.step(action)
-            if done:
-                break
-        print("Finished evaluation")
-
-    elif args.method == "fedavg":
-        print("Beginning evaluation, with FedAvg scheme.")
-        env = FedEnv(args, 0)
-        obs = env.reset()
-        for _ in range(1024):
-            # Perform DoNothing action
-            action = 0
-            obs, reward, done, info = env.step(action)
-            if done:
-                break
-        print("Finished evaluation.")
-
-    else:
-        print(f"Invalid method: '{args.method}'")
+    if args.method == "fed_rl" or args.method == "all":
+        evaluate_rl(args)
+    if args.method == "fed_random" or args.method == "all":
+        evaluate_random(args)
+    if args.method == "fed_avg" or args.method == "all":
+        evaluate_avg(args)

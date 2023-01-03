@@ -5,12 +5,13 @@
 import gym
 from gym import spaces
 import numpy as np
+import wandb
 from rl_local import LocalActions
 
 class FedEnv(gym.Env):
     """Custom Environment that follows gym interface"""
 
-    def __init__(self, args, device, save_loss=True):
+    def __init__(self, args, device, method, save_loss=True, save_rewards=False):
         print(f"[RL Environment] Initializing environment for device {device}")
 
         super(FedEnv, self).__init__()
@@ -18,23 +19,26 @@ class FedEnv(gym.Env):
         # The actions are ShareWeights, SwapWeights, ShareRepresentations, and DoNothing
         # The observations are (src_loss, trg_loss, avg_loss)
 
-        # TODO: Replace high=100 with non-placeholder value
+        # TODO: Replace high=10 with non-placeholder value
 
         args.device = device
 
         self.action_space = spaces.Discrete(2)
-        self.observation_space = spaces.Box(low=0, high=100, shape=(3,), dtype=float)
+        self.observation_space = spaces.Box(low=0, high=2, shape=(3,), dtype=float)
 
         self.args = args
         self.epoch = 0
-        self.local_actions = LocalActions(self.args)
+        self.method = method
+        self.local_actions = LocalActions(self.args, self.method)
+        self.rewards = []
+
 
         self.epochs = args.epochs
-        self.method = args.method
         self.num_users = args.num_users
         self.frac = args.frac
         self.dummy_environment = args.dummy_environment
         self.save_loss = save_loss
+        self.save_rewards = save_rewards
 
 
     def step(self, action):
@@ -79,18 +83,23 @@ class FedEnv(gym.Env):
             post_action_loss_sum = self.post_action_losses[current_src] + self.post_action_losses[current_dest]
             
             reward = pre_action_loss_sum - post_action_loss_sum
+            if self.save_rewards:
+                self.rewards.append(reward)
         
         # Print out some information about the step taken
-        print(f"[RL Environment] Source: {current_src}, Destination: {current_dest}, Action: {action}, Reward: {reward}")
+        print(f"[RL Environment] ({current_src}->{current_dest}) Action: {action}, Reward: {reward:+.4f}")
         
         # If not all of the pairs in idxs_users have been exhausted, update the users
         if self.update_users():
             if self.dummy_environment:
                 observation = np.array([0, 0, 0])      
             else:
+                self.pre_action_losses = self.local_actions.local_evaluation(self.idxs_users)
+                self.loss_avg = sum(self.pre_action_losses.values()) / len(self.pre_action_losses.values())
+
                 current_src = self.idxs_users[self.usr_1]
                 current_dest = self.idxs_users[self.usr_2]
-                self.pre_action_losses = self.local_actions.local_evaluation([current_src, current_dest])
+
                 observation = np.array([
                     self.pre_action_losses[current_src],
                     self.pre_action_losses[current_dest],
@@ -103,7 +112,7 @@ class FedEnv(gym.Env):
 
             if not self.dummy_environment:
                 self.local_actions.local_training(self.idxs_users, self.epoch, save_loss=self.save_loss)
-                if self.method == "fedavg":
+                if self.method == "fed_avg":
                     print("[RL Environment] Averaging weights")
                     self.local_actions.average_all_weights(self.idxs_users)
 
@@ -114,26 +123,32 @@ class FedEnv(gym.Env):
             if self.dummy_environment:
                 observation = np.array([0, 0, 0])
             else:
-                losses = self.local_actions.local_evaluation(self.idxs_users, save_loss=self.save_loss)
-                self.loss_avg = sum(losses.values()) / len(losses.values())
+                self.pre_action_losses = self.local_actions.local_evaluation(self.idxs_users, save_loss=self.save_loss)
+                self.loss_avg = sum(self.pre_action_losses.values()) / len(self.pre_action_losses.values())
 
                 current_src = self.idxs_users[self.usr_1]
                 current_dest = self.idxs_users[self.usr_2]
-                self.pre_action_losses = self.local_actions.local_evaluation([current_src, current_dest])
 
                 observation = np.array([
-                    losses[current_src],
-                    losses[current_dest],
+                    self.pre_action_losses[current_src],
+                    self.pre_action_losses[current_dest],
                     self.loss_avg
                 ])   
 
             if (self.epoch == self.epochs):
                 print(f"[RL Environment] Finished {self.epochs} epochs")
                 done = True
-                if not self.dummy_environment and self.save_loss:
-                    print(f"[RL Environment] Plotting losses")
-                    self.local_actions.plot_local_losses()  
-            
+                if not self.dummy_environment:
+                    if self.save_loss:
+                        print(f"[RL Environment] Plotting losses")
+                        self.local_actions.plot_local_losses()
+                    if self.save_rewards:
+                        print(f"[RL Environment] Logging rewards")
+                        wandb.log({"mean-episode-reward": sum(self.rewards) / len(self.rewards)})
+                        self.rewards = []
+
+        # print(f"[RL Environment] Observation: [{observation[0]:.4f}, {observation[1]:.4f}, {observation[2]:.4f}]")
+
         return observation, reward, done, info
     
 
@@ -193,7 +208,8 @@ class FedEnv(gym.Env):
         print(f"[RL Environment] Resetting Environment")
 
         self.epoch = 0
-        self.local_actions = LocalActions(self.args)
+        self.rewards = []
+        self.local_actions = LocalActions(self.args, self.method)
 
         # Sample a new set of users
         self.sample_users()

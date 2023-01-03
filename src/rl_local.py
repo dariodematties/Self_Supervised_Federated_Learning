@@ -14,10 +14,11 @@ from utils import get_dataset, average_weights
 
 class LocalActions():
 
-    def __init__(self, args):
+    def __init__(self, args, method):
         
         self.args = args
         self.device = args.device
+        self.method = method
 
         # Load dataset
         self.train_dataset, self.test_dataset, self.user_groups = get_dataset(args)
@@ -69,7 +70,7 @@ class LocalActions():
         print("Model Information: ")
         print(self.local_models[0])
         print()
-        wandb.init(group="federated_mpi_experiment", config=vars(args))
+        wandb.init(config=vars(args))
 
 
     def share_weights(self, src, dest):
@@ -168,7 +169,7 @@ class LocalActions():
                                         idxs=self.user_groups[idx])
 
             # Perform local evaluation for the current user
-            acc, loss = local_model.inference(self.local_models[idx])
+            _, loss = local_model.inference(self.local_models[idx])
             current_losses[idx] = loss
             if save_loss:
                 self.local_test_losses[idx].append(loss)
@@ -180,10 +181,18 @@ class LocalActions():
         train_loss_data = [
             [x, f"User {idx}", y] for idx, ys in self.local_train_losses.items() for (x, y) in zip(range(len(ys)), ys)
         ]
-
         test_loss_data = [
             [x, f"User {idx}", y] for idx, ys in self.local_test_losses.items() for (x, y) in zip(range(len(ys)), ys)
         ]
+        
+        train_loss_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_train_losses.values())]
+        test_loss_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_test_losses.values())]
+
+        for step, train_loss_avg in enumerate(train_loss_avgs):
+            train_loss_data.append([step, "Avg", train_loss_avg])
+
+        for step, test_loss_avg in enumerate(test_loss_avgs):
+            test_loss_data.append([step, "Avg", test_loss_avg])
         
         train_loss_table = wandb.Table(data=train_loss_data, columns=["step", "lineKey", "lineVal"])
         test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
@@ -192,14 +201,14 @@ class LocalActions():
             "srajani/fed-users",
             train_loss_table,
             {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
-            {"title": "Train Loss vs. Per-Node Local Training Round"}
+            {"title": f"[{self.method}] Train Loss vs. Per-Node Local Training Round"}
         )
-        wandb.log({"train_loss_plot": plot})
+        wandb.log({f"{self.method}_train_loss_plot": plot})
 
         plot = wandb.plot_table(
             "srajani/fed-users",
             test_loss_table,
             {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
-            {"title": "Test Loss vs. Per-Node Local Training Round"}
+            {"title": f"[{self.method}] Test Loss vs. Per-Node Local Training Round"}
         )
-        wandb.log({"test_loss_plot": plot})
+        wandb.log({f"{self.method}_test_loss_plot": plot})
