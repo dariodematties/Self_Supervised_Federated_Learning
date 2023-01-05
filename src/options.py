@@ -9,7 +9,7 @@ def args_parser():
     parser = argparse.ArgumentParser()
 
     # reinforcement arguments
-    parser.add_argument('--method', type=str, choices=['fed_avg', 'fed_random', 'fed_rl', 'all'],
+    parser.add_argument('--method', type=str, choices=['fed_avg', 'fed_random', 'fed_rl', 'fed_no_actions', 'all'],
                         required=True, help='Whether to select actions randomly,\
                         learn the actions using an RL agent, use FedAvg, or evaluate \
                         all three methods.')
@@ -85,6 +85,9 @@ def args_parser():
                         help='rounds of early stopping')
     parser.add_argument('--verbose', type=int, default=1, help='verbose')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--test_fraction', type=float, default=0.1, help='fraction of \
+                        test dataset to use for test inference (use a smaller value to \
+                        speed up experiments)')
     
     args = parser.parse_args()
     return args

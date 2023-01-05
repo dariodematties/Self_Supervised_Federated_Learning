@@ -7,7 +7,7 @@ import copy
 import torch
 import wandb
 
-from update import LocalUpdate
+from update import LocalUpdate, test_inference
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
 from utils import get_dataset, average_weights
@@ -27,6 +27,7 @@ class LocalActions():
         self.local_models = {}
         self.local_train_losses = {}
         self.local_test_losses = {}
+        self.local_test_accuracies = {}
         
         for i in range(args.num_users):
             if args.supervision:
@@ -65,6 +66,7 @@ class LocalActions():
             self.local_models[i] = local_model
             self.local_train_losses[i] = []
             self.local_test_losses[i] = []
+            self.local_test_accuracies[i] = []
 
         print()
         print("Model Information: ")
@@ -162,41 +164,26 @@ class LocalActions():
         current_losses = {}
 
         for idx in idxs_users:            
-            args = self.args
-
-            # Create a LocalUpdate object for the current user
-            local_model = LocalUpdate(args=args, dataset=self.train_dataset,
-                                        idxs=self.user_groups[idx])
-
             # Perform local evaluation for the current user
-            _, loss = local_model.inference(self.local_models[idx])
+            acc, loss = test_inference(self.args, self.local_models[idx], self.test_dataset)
             current_losses[idx] = loss
             if save_loss:
                 self.local_test_losses[idx].append(loss)
+                if self.args.supervision:
+                    self.local_test_accuracies[idx].append(acc)
 
         return current_losses
 
 
     def plot_local_losses(self):
+
         train_loss_data = [
             [x, f"User {idx}", y] for idx, ys in self.local_train_losses.items() for (x, y) in zip(range(len(ys)), ys)
         ]
-        test_loss_data = [
-            [x, f"User {idx}", y] for idx, ys in self.local_test_losses.items() for (x, y) in zip(range(len(ys)), ys)
-        ]
-        
         train_loss_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_train_losses.values())]
-        test_loss_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_test_losses.values())]
-
         for step, train_loss_avg in enumerate(train_loss_avgs):
             train_loss_data.append([step, "Avg", train_loss_avg])
-
-        for step, test_loss_avg in enumerate(test_loss_avgs):
-            test_loss_data.append([step, "Avg", test_loss_avg])
-        
         train_loss_table = wandb.Table(data=train_loss_data, columns=["step", "lineKey", "lineVal"])
-        test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
-
         plot = wandb.plot_table(
             "srajani/fed-users",
             train_loss_table,
@@ -205,6 +192,14 @@ class LocalActions():
         )
         wandb.log({f"{self.method}_train_loss_plot": plot})
 
+
+        test_loss_data = [
+            [x, f"User {idx}", y] for idx, ys in self.local_test_losses.items() for (x, y) in zip(range(len(ys)), ys)
+        ]
+        test_loss_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_test_losses.values())]
+        for step, test_loss_avg in enumerate(test_loss_avgs):
+            test_loss_data.append([step, "Avg", test_loss_avg])
+        test_loss_table = wandb.Table(data=test_loss_data, columns=["step", "lineKey", "lineVal"])
         plot = wandb.plot_table(
             "srajani/fed-users",
             test_loss_table,
@@ -212,3 +207,20 @@ class LocalActions():
             {"title": f"[{self.method}] Test Loss vs. Per-Node Local Training Round"}
         )
         wandb.log({f"{self.method}_test_loss_plot": plot})
+
+
+        if self.args.supervision:
+            test_accuracy_data = [
+                [x, f"User {idx}", y] for idx, ys in self.local_test_accuracies.items() for (x, y) in zip(range(len(ys)), ys)
+            ]
+            test_accuracy_avgs = [sum(losses) / len(losses) for losses in zip(*self.local_test_accuracies.values())]
+            for step, test_accuracy_avg in enumerate(test_accuracy_avgs):
+                test_accuracy_data.append([step, "Avg", test_accuracy_avg])
+            test_accuracy_table = wandb.Table(data=test_accuracy_data, columns=["step", "lineKey", "lineVal"])
+            plot = wandb.plot_table(
+                "srajani/fed-users",
+                test_accuracy_table,
+                {"step": "step", "lineKey": "lineKey", "lineVal": "lineVal"},
+                {"title": f"[{self.method}] Test Accuracy vs. Per-Node Local Training Round"}
+            )
+            wandb.log({f"{self.method}_test_accuracy_plot": plot})

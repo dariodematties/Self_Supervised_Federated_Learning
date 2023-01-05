@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 
 
 class DatasetSplit(Dataset):
@@ -74,7 +74,7 @@ class LocalUpdate(object):
         if self.args.supervision:
             # Supervised learning
             for iter in range(self.args.local_ep):
-                batch_loss = []
+                losses = []
                 for batch_idx, (images, labels) in enumerate(self.trainloader):
                     images, labels = images.to(self.device), labels.to(self.device)
 
@@ -89,15 +89,15 @@ class LocalUpdate(object):
                             global_round + 1, iter, batch_idx * len(images),
                             len(self.trainloader.dataset),
                             100. * batch_idx / len(self.trainloader), loss.item()))
-                    batch_loss.append(loss.item())
-                epoch_loss.append(sum(batch_loss) / len(batch_loss))
+                    losses.append(loss.item() / images.shape[0])
 
-            return model.state_dict(), sum(epoch_loss) / len(epoch_loss)
+            return model.state_dict(), sum(losses) / len(losses)
+
         else:
             # Self-Supervised learning
             out = []
             for iter in range(self.args.local_ep):
-                batch_loss = []
+                losses = []
                 for batch_idx, (images, _) in enumerate(self.trainloader):
                     images = images.to(self.device)
 
@@ -112,11 +112,10 @@ class LocalUpdate(object):
                             global_round + 1, iter, batch_idx * len(images),
                             len(self.trainloader.dataset),
                             100. * batch_idx / len(self.trainloader), loss.item()))
-                    batch_loss.append(loss.item())
-                epoch_loss.append(sum(batch_loss) / len(batch_loss))
+                    losses.append(loss.item() / images.shape[0])
                 out.append((iter, images, outputs),)
 
-            return model.state_dict(), sum(epoch_loss) / len(epoch_loss), out
+            return model.state_dict(), sum(losses) / len(losses), out
 
 
     def inference(self, model):
@@ -127,15 +126,16 @@ class LocalUpdate(object):
 
         if self.args.supervision:
             # Supervised learning
-            batch_loss = []
+            losses = []
             total, correct = 0.0, 0.0
+
             for batch_idx, (images, labels) in enumerate(self.testloader):
                 images, labels = images.to(self.device), labels.to(self.device)
 
                 # Inference
                 outputs = model(images)
                 loss = self.criterion(outputs, labels)
-                batch_loss.append(loss.item())
+                losses.append(loss.item() / images.shape[0])
 
                 # Prediction
                 _, pred_labels = torch.max(outputs, 1)
@@ -144,21 +144,21 @@ class LocalUpdate(object):
                 total += len(labels)
 
             accuracy = correct / total
-            loss = sum(batch_loss) / len(batch_loss)
+            loss = sum(losses) / len(losses)
             return accuracy, loss
 
         else:
             # Self-Supervised learning
-            batch_loss = []
+            losses = []
             for batch_idx, (images, labels) in enumerate(self.testloader):
                 images = images.to(self.device)
 
                 # Inference
                 outputs = model(images)
                 loss = self.criterion(outputs, images)
-                batch_loss.append(loss.item())
+                losses.append(loss.item() / images.shape[0])
                 
-            loss = sum(batch_loss) / len(batch_loss)
+            loss = sum(losses) / len(losses)
             return None, loss
     
     def process_samples(self, dataset, idxs, model):
@@ -185,23 +185,18 @@ class LocalUpdate(object):
                 output_list.extend(outputs)
 
         return output_list
-                
 
 
 def test_inference(args, model, test_dataset):
     """ Returns the test accuracy and loss.
     """
 
-    model.eval()
-    loss, total, correct = 0.0, 0.0, 0.0
-
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # device = 'cuda' if args.gpu else 'cpu'
-    #criterion = nn.NLLLoss().to(device)
-    testloader = DataLoader(test_dataset, batch_size=128,
-                            shuffle=False)
+    test_batch_size = 256
+    trimmed_test_dataset = Subset(test_dataset, range(int(len(test_dataset) * args.test_fraction)))
+    testloader = DataLoader(trimmed_test_dataset, batch_size=test_batch_size, shuffle=False)
 
-
+    model.eval()
 
     if args.supervision:
         # Supervised learning
@@ -211,17 +206,19 @@ def test_inference(args, model, test_dataset):
         # Self-Supervised learning
         criterion = nn.MSELoss().to(device)
 
-
-
     if args.supervision:
         # Supervised learning
+        losses = []
+        total, correct = 0.0, 0.0
+
         for batch_idx, (images, labels) in enumerate(testloader):
+
             images, labels = images.to(device), labels.to(device)
 
             # Inference
             outputs = model(images)
-            batch_loss = criterion(outputs, labels)
-            loss += batch_loss.item()
+            loss = criterion(outputs, labels)
+            losses.append(loss.item() / images.shape[0])
 
             # Prediction
             _, pred_labels = torch.max(outputs, 1)
@@ -229,18 +226,22 @@ def test_inference(args, model, test_dataset):
             correct += torch.sum(torch.eq(pred_labels, labels)).item()
             total += len(labels)
 
-        accuracy = correct/total
+        accuracy = correct / total
+        loss = sum(losses) / len(losses)
+
+        return accuracy, loss
+
     else:
         # Self-Supervised learning
+        losses = []
         for batch_idx, (images, labels) in enumerate(testloader):
+            
             images = images.to(device)
 
             # Inference
             outputs = model(images)
-            batch_loss = criterion(outputs, images)
-            loss += batch_loss.item()
+            loss = criterion(outputs, images)
+            losses.append(loss.item() / images.shape[0])
 
-            total += len(labels)
-
-        accuracy = loss/total
-    return accuracy, loss
+        loss = sum(losses) / len(losses)
+        return None, loss

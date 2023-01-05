@@ -11,26 +11,19 @@ from rl_local import LocalActions
 class FedEnv(gym.Env):
     """Custom Environment that follows gym interface"""
 
-    def __init__(self, args, device, method, save_loss=True, save_rewards=False):
+    def __init__(self, args, device, method, save_loss=True, save_rewards_and_actions=False):
         print(f"[RL Environment] Initializing environment for device {device}")
 
         super(FedEnv, self).__init__()
 
-        # The actions are ShareWeights, SwapWeights, ShareRepresentations, and DoNothing
-        # The observations are (src_loss, trg_loss, avg_loss)
-
-        # TODO: Replace high=10 with non-placeholder value
-
         args.device = device
-
-        self.action_space = spaces.Discrete(2)
-        self.observation_space = spaces.Box(low=0, high=2, shape=(3,), dtype=float)
 
         self.args = args
         self.epoch = 0
         self.method = method
         self.local_actions = LocalActions(self.args, self.method)
         self.rewards = []
+        self.actions = []
 
 
         self.epochs = args.epochs
@@ -38,7 +31,13 @@ class FedEnv(gym.Env):
         self.frac = args.frac
         self.dummy_environment = args.dummy_environment
         self.save_loss = save_loss
-        self.save_rewards = save_rewards
+        self.save_rewards_and_actions = save_rewards_and_actions
+
+        self.action_space = spaces.Discrete(2)
+        if self.args.supervision:
+            self.observation_space = spaces.Box(low=0, high=2, shape=(3,), dtype=float)
+        else:
+            self.observation_space = spaces.Box(low=-2, high=0, shape=(3,), dtype=float)
 
 
     def step(self, action):
@@ -83,8 +82,12 @@ class FedEnv(gym.Env):
             post_action_loss_sum = self.post_action_losses[current_src] + self.post_action_losses[current_dest]
             
             reward = pre_action_loss_sum - post_action_loss_sum
-            if self.save_rewards:
+
+            # reward = - (post_action_loss_sum ** 2)
+
+            if self.save_rewards_and_actions:
                 self.rewards.append(reward)
+                self.actions.append(action)
         
         # Print out some information about the step taken
         print(f"[RL Environment] ({current_src}->{current_dest}) Action: {action}, Reward: {reward:+.4f}")
@@ -142,10 +145,16 @@ class FedEnv(gym.Env):
                     if self.save_loss:
                         print(f"[RL Environment] Plotting losses")
                         self.local_actions.plot_local_losses()
-                    if self.save_rewards:
-                        print(f"[RL Environment] Logging rewards")
-                        wandb.log({"mean-episode-reward": sum(self.rewards) / len(self.rewards)})
+                    if self.save_rewards_and_actions:
+                        print(f"[RL Environment] Logging rewards and actions")
+                        wandb.log(
+                            {
+                                "mean-episode-reward": sum(self.rewards) / len(self.rewards),
+                                "share-weights-action-ratio": self.actions.count(1) / len(self.actions)
+                            }
+                        )
                         self.rewards = []
+                        self.actions = []
 
         # print(f"[RL Environment] Observation: [{observation[0]:.4f}, {observation[1]:.4f}, {observation[2]:.4f}]")
 
@@ -209,6 +218,7 @@ class FedEnv(gym.Env):
 
         self.epoch = 0
         self.rewards = []
+        self.actions = []
         self.local_actions = LocalActions(self.args, self.method)
 
         # Sample a new set of users

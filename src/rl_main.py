@@ -16,10 +16,21 @@ from rl_environment import FedEnv
 from options import args_parser
 from utils import exp_details
 
+def evaluate_no_actions(args):
+    print("Beginning evaluation, with no actions taken.")
+    env = FedEnv(args=args, device=0, method="fed_no_actions")
+    obs = env.reset()
+    done = False
+    while not done:
+        # Perform DoNothing action
+        action = 0
+        obs, reward, done, info = env.step(action)
+    print("Finished evaluation.")
+
 def evaluate_rl(args):
     print("Beginning policy network training with PPO.")
-    # save_loss is set to False during training; save_rewards is set to True
-    env = FedEnv(args=args, device=0, method="fed_rl", save_loss=False, save_rewards=True)
+    # save_loss is set to False during training; save_rewards_and_actions is set to True
+    env = FedEnv(args=args, device=0, method="fed_rl", save_loss=False, save_rewards_and_actions=True)
     model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr)
     train_steps = args.rl_episodes * args.epochs * (args.num_users * args.frac) ** 2
     model.learn(total_timesteps=train_steps)
@@ -83,6 +94,8 @@ if __name__ == '__main__':
 
     exp_details(args)
 
+    if args.method == "fed_no_actions" or args.method == "all":
+        evaluate_no_actions(args)
     if args.method == "fed_rl" or args.method == "all":
         evaluate_rl(args)
     if args.method == "fed_random" or args.method == "all":
