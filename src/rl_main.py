@@ -7,9 +7,11 @@ import time
 
 import torch
 import gym
+import numpy as np
 
 import stable_baselines3
 from stable_baselines3 import PPO
+from stable_baselines3.common.utils import set_random_seed
 
 from rl_environment import FedEnv
 
@@ -34,6 +36,7 @@ def evaluate_rl(args):
     model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr)
     train_steps = args.rl_episodes * args.epochs * (args.num_users * args.frac) ** 2
     model.learn(total_timesteps=train_steps)
+    env.plot_actions_and_rewards()
     print("Finished training.")
     print("Saving model to save/FedRL")
     model.save("save/FedRL")
@@ -91,6 +94,10 @@ if __name__ == '__main__':
         torch.cuda.set_device(int(args.gpu))
 
     args.device = 'cuda:'+ str(args.gpu) if torch.cuda.is_available() else 'cpu'
+
+    # Set random seeds for numpy and stable baselines
+    np.random.seed(args.seed)
+    set_random_seed(args.seed)
 
     exp_details(args)
 

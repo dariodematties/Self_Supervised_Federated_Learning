@@ -22,9 +22,11 @@ class FedEnv(gym.Env):
         self.epoch = 0
         self.method = method
         self.local_actions = LocalActions(self.args, self.method)
-        self.rewards = []
-        self.actions = []
 
+        self.episode_rewards = []
+        self.episode_actions = []
+        self.all_rewards = []
+        self.all_actions = []
 
         self.epochs = args.epochs
         self.num_users = args.num_users
@@ -86,8 +88,8 @@ class FedEnv(gym.Env):
             # reward = - (post_action_loss_sum ** 2)
 
             if self.save_rewards_and_actions:
-                self.rewards.append(reward)
-                self.actions.append(action)
+                self.episode_rewards.append(reward)
+                self.episode_actions.append(action)
         
         # Print out some information about the step taken
         print(f"[RL Environment] ({current_src}->{current_dest}) Action: {action}, Reward: {reward:+.4f}")
@@ -146,15 +148,10 @@ class FedEnv(gym.Env):
                         print(f"[RL Environment] Plotting losses")
                         self.local_actions.plot_local_losses()
                     if self.save_rewards_and_actions:
-                        print(f"[RL Environment] Logging rewards and actions")
-                        wandb.log(
-                            {
-                                "mean-episode-reward": sum(self.rewards) / len(self.rewards),
-                                "share-weights-action-ratio": self.actions.count(1) / len(self.actions)
-                            }
-                        )
-                        self.rewards = []
-                        self.actions = []
+                        self.all_rewards.append(self.episode_rewards)
+                        self.all_actions.append(self.episode_actions)
+                        self.episode_rewards = []
+                        self.episode_actions = []
 
         # print(f"[RL Environment] Observation: [{observation[0]:.4f}, {observation[1]:.4f}, {observation[2]:.4f}]")
 
@@ -206,6 +203,28 @@ class FedEnv(gym.Env):
         self.usr_2 = 0
 
 
+    def plot_actions_and_rewards(self):
+        print("[RL Environment] Plotting actions and rewards")
+
+        # Plot All Rewards
+        all_rewards_flattened = [reward for episode_rewards in self.all_rewards for reward in episode_rewards]
+        data = [[step, reward] for (step, reward) in enumerate(all_rewards_flattened)]
+        table = wandb.Table(data=data, columns=["Step", "Reward"])
+        wandb.log({"rewards": wandb.plot.line(table, "Step", "Reward", title="Reward vs. Training Step")})
+
+        # Plot Mean Episode Rewards
+        mean_episode_rewards = list(map(lambda l: sum(l) / len (l), self.all_rewards))
+        data = [[episode, reward] for (episode, reward) in enumerate(mean_episode_rewards)]
+        table = wandb.Table(data=data, columns=["Episode", "Reward"])
+        wandb.log({"mean-episode-rewards": wandb.plot.line(table, "Episode", "Reward", title="Mean Reward vs. Training Episode")})
+
+        # Plot ShareWeights Action Ratio
+        episode_action_ratios = list(map(lambda l: sum(l) / len (l), self.all_actions))
+        data = [[episode, action_ratio] for (episode, action_ratio) in enumerate(episode_action_ratios)]
+        table = wandb.Table(data=data, columns=["Episode", "ShareWeights Action Ratio"])
+        wandb.log({"episode-action-ratios": wandb.plot.line(table, "Episode", "ShareWeights Action Ratio", title="ShareWeights Action Ratio vs. Training Episode")})
+
+
     def reset(self):
         """Reset the environment.
 
@@ -217,8 +236,8 @@ class FedEnv(gym.Env):
         print(f"[RL Environment] Resetting Environment")
 
         self.epoch = 0
-        self.rewards = []
-        self.actions = []
+        self.episode_rewards = []
+        self.episode_actions = []
         self.local_actions = LocalActions(self.args, self.method)
 
         # Sample a new set of users
