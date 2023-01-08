@@ -24,11 +24,12 @@ class DatasetSplit(Dataset):
 
 
 class LocalUpdate(object):
-    def __init__(self, args, dataset, idxs):
+    def __init__(self, args, device, dataset, idxs):
         self.args = args
         self.trainloader, self.validloader, self.testloader = self.train_val_test(
             dataset, list(idxs))
-        self.device = 'cuda:'+str(args.gpu) if torch.cuda.is_available() else 'cpu'
+        self.device = device
+        # self.device = 'cuda:'+str(args.gpu) if torch.cuda.is_available() else 'cpu'
         # self.device = 'cuda' if args.gpu else 'cpu'
         if args.supervision:
             # Supervised learning
@@ -161,6 +162,7 @@ class LocalUpdate(object):
             loss = sum(losses) / len(losses)
             return None, loss
     
+    
     def process_samples(self, dataset, idxs, model):
         dataloader = DataLoader(DatasetSplit(dataset, idxs), batch_size=int(len(idxs)/10), shuffle=False)
 
@@ -187,11 +189,10 @@ class LocalUpdate(object):
         return output_list
 
 
-def test_inference(args, model, test_dataset):
+def test_inference(args, device, model, test_dataset):
     """ Returns the test accuracy and loss.
     """
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     test_batch_size = 256
     trimmed_test_dataset = Subset(test_dataset, range(int(len(test_dataset) * args.test_fraction)))
     testloader = DataLoader(trimmed_test_dataset, batch_size=test_batch_size, shuffle=False)

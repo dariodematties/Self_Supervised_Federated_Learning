@@ -6,17 +6,20 @@ import os
 import time
 
 import torch
-import gym
 import numpy as np
 
-import stable_baselines3
 from stable_baselines3 import PPO
 from stable_baselines3.common.utils import set_random_seed
+from stable_baselines3.common.vec_env import SubprocVecEnv
+
+import wandb
 
 from rl_environment import FedEnv
-
 from options import args_parser
 from utils import exp_details
+
+def make_env(device):
+    return lambda: FedEnv(args=args, device=device, method="fed_rl", save_loss=False, save_rewards_and_actions=True)
 
 def evaluate_no_actions(args):
     print("Beginning evaluation, with no actions taken.")
@@ -32,11 +35,9 @@ def evaluate_no_actions(args):
 def evaluate_rl(args):
     print("Beginning policy network training with PPO.")
     # save_loss is set to False during training; save_rewards_and_actions is set to True
-    env = FedEnv(args=args, device=0, method="fed_rl", save_loss=False, save_rewards_and_actions=True)
-    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr)
-    train_steps = args.rl_episodes * args.epochs * (args.num_users * args.frac) ** 2
-    model.learn(total_timesteps=train_steps)
-    env.plot_actions_and_rewards()
+    env = SubprocVecEnv([make_env(f'cuda:{i}') for i in range(args.n_gpus)])
+    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
+    model.learn(total_timesteps=args.total_timesteps * args.n_gpus)
     print("Finished training.")
     print("Saving model to save/FedRL")
     model.save("save/FedRL")

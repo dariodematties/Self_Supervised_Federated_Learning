@@ -25,8 +25,12 @@ def args_parser():
                         for PPO algorithm.")
     parser.add_argument('--ppo_bs', type=int, default=16, help="batch size\
                         for PPO algorithm.")
+    parser.add_argument('--total_timesteps', type=int, default=2000, help="total timesteps for\
+                        training policy network, per GPU")
     parser.add_argument('--rl_episodes', type=int, default=10, help="number of \
                         episodes to train RL agent for.")
+    parser.add_argument('--episode_steps', type=int, default=200, help="number of \
+                        timesteps in a single episode")
 
     # federated arguments (Notation for the arguments followed from paper)
     parser.add_argument('--epochs', type=int, default=5,
@@ -83,7 +87,7 @@ def args_parser():
                         non-i.i.d setting (use 0 for equal splits)')
     parser.add_argument('--stopping_rounds', type=int, default=10,
                         help='rounds of early stopping')
-    parser.add_argument('--verbose', type=int, default=1, help='verbose')
+    parser.add_argument('--verbose', type=int, default=0, help='verbose')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     parser.add_argument('--test_fraction', type=float, default=0.1, help='fraction of \
                         test dataset to use for test inference (use a smaller value to \

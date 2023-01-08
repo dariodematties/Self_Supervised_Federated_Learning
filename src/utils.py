@@ -84,6 +84,19 @@ def average_weights(w):
     return w_avg
 
 
+def weighted_average_weights(state_dicts, weights):
+    """
+    Returns the weighted average of the weights.
+    """
+    w_avg = copy.deepcopy(state_dicts[0])
+    for key in w_avg.keys():
+        s = 0
+        for idx, state_dict in enumerate(state_dicts):
+            s += state_dict[key] * weights[idx]
+        w_avg[key] = s
+    return w_avg
+
+
 def exp_details(args):
     print('\nExperimental details:')
     print(f'    Model     : {args.model}')
