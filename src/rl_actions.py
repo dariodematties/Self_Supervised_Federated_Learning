@@ -10,7 +10,7 @@ import wandb
 from update import LocalUpdate, test_inference
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
-from utils import get_dataset, weighted_average_weights
+from utils import get_dataset, weighted_average_weights, average_weights
 
 class RLActions():
 
@@ -95,6 +95,12 @@ class RLActions():
 
         self.global_model.load_state_dict(avg_weights)
 
+
+    def average_into_global(self):
+        local_model_weights = [model.state_dict() for model in self.local_models.values()]
+        avg_weights = average_weights(local_model_weights)
+        self.global_model.load_state_dict(avg_weights)
+        
 
     def drop_model(self, usr):
         """

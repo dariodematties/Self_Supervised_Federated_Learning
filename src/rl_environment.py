@@ -24,7 +24,7 @@ class FedEnv(gym.Env):
         super(FedEnv, self).__init__()
 
         # Set up logging with Weights & Biases
-        wandb.init(config=vars(args), group="lift-drop-test-2")
+        wandb.init(config=vars(args), group="lift-drop-test-4")
 
         # Reward and action tracking
         self.all_rewards = []
@@ -100,7 +100,8 @@ class FedEnv(gym.Env):
             if action == 1:
                 self.rl_actions.local_training(self.curr_usr, epoch=0)
             if action == 2:
-                self.rl_actions.lift_model(self.curr_usr, 0.05)
+                # self.rl_actions.lift_model(self.curr_usr, 0.05)
+                self.rl_actions.average_into_global()
             if action == 3:
                 self.rl_actions.drop_model(self.curr_usr)
 
