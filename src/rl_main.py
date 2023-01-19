@@ -8,11 +8,9 @@ import time
 import torch
 import numpy as np
 
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv
-
-import wandb
 
 from rl_environment import FedEnv
 from options import args_parser
@@ -36,20 +34,21 @@ def evaluate_rl(args):
     print("Beginning policy network training with PPO.")
     # save_loss is set to False during training; save_rewards_and_actions is set to True
     env = SubprocVecEnv([make_env(f'cuda:{i}') for i in range(args.n_gpus)])
-    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
+    model = DQN("MlpPolicy", env, verbose=1, gamma=args.ppo_gamma, learning_starts=400, target_update_interval=1600)
+    # model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
     model.learn(total_timesteps=args.total_timesteps * args.n_gpus)
     print("Finished training.")
     print("Saving model to save/FedRL")
     model.save("save/FedRL")
 
-    print("Beginning evaluation, with actions selected by policy network.")
-    env = FedEnv(args=args, device=0, method="fed_rl")
-    obs = env.reset()
-    done = False
-    while not done:
-        action, _ = model.predict(obs)
-        obs, reward, done, info = env.step(action)
-    print("Finished evaluation")
+    # print("Beginning evaluation, with actions selected by policy network.")
+    # env = FedEnv(args=args, device=0, method="fed_rl")
+    # obs = env.reset()
+    # done = False
+    # while not done:
+    #     action, _ = model.predict(obs)
+    #     obs, reward, done, info = env.step(action)
+    # print("Finished evaluation")
 
 
 def evaluate_random(args):

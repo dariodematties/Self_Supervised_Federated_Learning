@@ -68,6 +68,7 @@ def get_dataset(args):
             else:
                 # Chose equal splits for every user
                 user_groups = mnist_noniid_custom(train_dataset, args.num_users)
+                # user_groups = mnist_noniid(train_dataset, args.num_users)
 
     return train_dataset, test_dataset, user_groups
 
@@ -92,7 +93,7 @@ def weighted_average_weights(state_dicts, weights):
     for key in w_avg.keys():
         s = 0
         for idx, state_dict in enumerate(state_dicts):
-            s += state_dict[key] * weights[idx]
+            s += torch.mul(state_dict[key], weights[idx])
         w_avg[key] = s
     return w_avg
 

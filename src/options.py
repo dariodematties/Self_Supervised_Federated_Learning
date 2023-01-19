@@ -16,7 +16,7 @@ def args_parser():
     parser.add_argument('--dummy_environment', action='store_true',
                         help="Whether to use a dummy environment for testing \
                         (no actions or local training)")
-    parser.add_argument('--ppo_n_steps', type=int, default=64, help="n_steps parameter \
+    parser.add_argument('--ppo_n_steps', type=int, default=256, help="n_steps parameter \
                         for PPO algorithm; determines number of steps before policy \
                         network receives a gradient update")
     parser.add_argument('--ppo_lr', type=float, default=0.0003, help="learning rate\
@@ -89,9 +89,12 @@ def args_parser():
                         help='rounds of early stopping')
     parser.add_argument('--verbose', type=int, default=0, help='verbose')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
-    parser.add_argument('--test_fraction', type=float, default=0.1, help='fraction of \
+    parser.add_argument('--test_fraction', type=float, default=0.05, help='fraction of \
                         test dataset to use for test inference (use a smaller value to \
                         speed up experiments)')
+    parser.add_argument('--train_minibatches', type=int, default=2, help='number of \
+                        minibatches to use for training (use a smaller value to speed \
+                        up experiments')
     
     args = parser.parse_args()
     return args

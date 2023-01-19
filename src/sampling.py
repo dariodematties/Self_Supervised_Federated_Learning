@@ -58,8 +58,9 @@ def mnist_noniid_custom(dataset, num_users):
     :param num_users:
     :return:
     """
-    # 60,000 training imgs -->  200 imgs/shard X 300 shards
+    # 60,000 training imgs -->  300 imgs/shard X 200 shards
     num_shards, num_imgs = 5, 12000
+    # num_shards, num_imgs = 60, 1000
     idx_shard = [i for i in range(num_shards)]
     dict_users = {i: np.array([], dtype=int) for i in range(num_users)}
     idxs = np.arange(num_shards*num_imgs)
@@ -71,12 +72,15 @@ def mnist_noniid_custom(dataset, num_users):
     idxs = idxs_labels[0, :]
 
     # divide and assign 1 shard/client
+    # use only 1/4 of samples to speed up training
     for i in range(num_users):
         rand_set = set(np.random.choice(idx_shard, 1, replace=False))
         idx_shard = list(set(idx_shard) - rand_set)
         for rand in rand_set:
+            rand_idxs = idxs[rand*num_imgs:(rand+1)*num_imgs]
             dict_users[i] = np.concatenate(
-                (dict_users[i], idxs[rand*num_imgs:(rand+1)*num_imgs]), axis=0)
+                (dict_users[i], [idx for idx in rand_idxs if idx % 4 == 0]), axis=0)
+            # dict_users[i] = np.concatenate((dict_users[i], rand_idxs), axis=0)
 
         # print(dict_users[i])
 

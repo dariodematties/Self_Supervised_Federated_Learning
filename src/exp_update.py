@@ -5,6 +5,7 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
+import copy
 
 
 class DatasetSplit(Dataset):
@@ -59,7 +60,7 @@ class LocalUpdate(object):
         return trainloader, validloader, testloader
 
 
-    def update_weights(self, model, global_round):
+    def update_weights(self, model, global_round, global_grad, global_grad_ratio):
         # Set mode to train model
         model.train()
         epoch_loss = []
@@ -74,8 +75,14 @@ class LocalUpdate(object):
 
         if self.args.supervision:
             # Supervised learning
+            model.zero_grad()
+            grad_avg = copy.deepcopy(list(model.parameters()))
+
+            total_batches = 0
+
             for iter in range(self.args.local_ep):
                 losses = []
+
                 for batch_idx, (images, labels) in enumerate(self.trainloader):
 
                     images, labels = images.to(self.device), labels.to(self.device)
@@ -84,7 +91,16 @@ class LocalUpdate(object):
                     log_probs = model(images)
                     loss = self.criterion(log_probs, labels)
                     loss.backward()
+                    for param_avg, param_global, param in zip(grad_avg, global_grad, model.parameters()):
+                        if param_global.grad is not None:
+                            param.grad = param.grad * (1 - global_grad_ratio) + param_global.grad * global_grad_ratio
+                        if param_avg.grad is None:
+                            param_avg.grad = param.grad
+                        else:
+                            param_avg.grad += param.grad
+                    total_batches += 1
                     optimizer.step()
+                    
 
                     if self.args.verbose and (batch_idx % 10 == 0):
                         print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -92,8 +108,11 @@ class LocalUpdate(object):
                             len(self.trainloader.dataset),
                             100. * batch_idx / len(self.trainloader), loss.item()))
                     losses.append(loss.item() / images.shape[0])
+            
+            for param in grad_avg:
+                param.grad /= total_batches
 
-            return model.state_dict(), sum(losses) / len(losses)
+            return model.state_dict(), sum(losses) / len(losses), grad_avg
 
         else:
             # Self-Supervised learning

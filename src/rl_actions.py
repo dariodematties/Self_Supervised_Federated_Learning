@@ -96,11 +96,13 @@ class RLActions():
         self.global_model.load_state_dict(avg_weights)
 
 
-    def average_into_global(self):
+    def average_into_global(self, weight):
         local_model_weights = [model.state_dict() for model in self.local_models.values()]
+        global_model_weights = self.global_model.state_dict()
         avg_weights = average_weights(local_model_weights)
-        self.global_model.load_state_dict(avg_weights)
-        
+        new_global_weights = weighted_average_weights([avg_weights, global_model_weights], torch.tensor([weight, 1 - weight]).to(self.device))
+        self.global_model.load_state_dict(new_global_weights)      
+
 
     def drop_model(self, usr):
         """
@@ -141,10 +143,37 @@ class RLActions():
             w, loss, out = local_model.update_weights(
                     model=self.local_models[usr], global_round=epoch)
 
+        return loss
 
-    def local_evaluation(self, usr, save_loss=False):
+
+    def local_train_evaluation(self, usr):
         """
-        Perform local evaluation for the specified user.
+        Perform local train evaluation for the specified user.
+
+        Parameters
+        ----------
+        usr: int
+            the user for which to perform local evaluation
+            a value of -1 can be used to refer to the global model
+            
+        Returns
+        -------
+        loss: float
+            the current loss for the specified user
+        """
+
+        # Create a LocalUpdate object for the current user
+        local_model = LocalUpdate(args=self.args, device=self.device,
+                    dataset=self.train_dataset, idxs=self.user_groups[usr])
+
+        # Perform local train evaluation for the current user
+        _, loss = local_model.inference(model=self.local_models[usr])
+        return loss
+
+
+    def local_test_evaluation(self, usr, save_loss=False):
+        """
+        Perform local test evaluation for the specified user.
 
         Parameters
         ----------

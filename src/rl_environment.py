@@ -8,7 +8,6 @@ from gym import spaces
 import wandb
 
 import numpy as np
-import logging
 
 from rl_actions import RLActions
 
@@ -18,13 +17,10 @@ class FedEnv(gym.Env):
     def __init__(self, args, device, method, save_loss=True, save_rewards_and_actions=False):
         print(f"[RL Environment] Initializing environment for device {device}")
 
-        if device not in ["cuda:0", "cpu"]:
-            logging.disable(logging.CRITICAL)
-
         super(FedEnv, self).__init__()
 
         # Set up logging with Weights & Biases
-        wandb.init(config=vars(args), group="lift-drop-test-4")
+        wandb.init(config=vars(args), group="train-aggregate-DQN")
 
         # Reward and action tracking
         self.all_rewards = []
@@ -43,19 +39,16 @@ class FedEnv(gym.Env):
         self.method = method
         self.device = device
 
-        self.action_space = spaces.Discrete(4)
+        assert args.dataset == "mnist"
+
+        self.action_space = spaces.Discrete(2)
 
         self.action_dict = {
-            0: "Move",
-            1: "Train",
-            2: "Lift",
-            3: "Drop"
+            0: "Train",
+            1: "Aggregate"
         }
 
-        if self.args.supervision:
-            self.observation_space = spaces.Box(low=0, high=2, shape=(2,), dtype=float)
-        else:
-            self.observation_space = spaces.Box(low=-2, high=0, shape=(2,), dtype=float)
+        self.observation_space = spaces.Box(low=np.array([-1, -1, 0]), high=np.array([1, 1, 100]), shape=(3,), dtype=np.float64)
 
 
     def step(self, action):
@@ -84,34 +77,26 @@ class FedEnv(gym.Env):
         observation, reward, done, info = np.array([0, 0]), 0, False, {}
 
         if not self.dummy_environment:
-            
-            # Compute pre-action global loss
-            pre_action_global_loss = self.rl_actions.local_evaluation(-1, save_loss=self.save_loss)
-            
-            # Take action:
-            #   0: Move to the next user
-            #   1: Local training
-            #   2: Lift local model
-            #   3: Drop global model
 
+            pre_action_global_loss = self.rl_actions.local_test_evaluation(-1)
+            
             if action == 0:
-                self.idx_curr_usr = (self.idx_curr_usr + 1) % len(self.curr_usrs)
-                self.curr_usr = self.curr_usrs[self.idx_curr_usr]
+                self.steps_since_last_aggregation += 1
+                for usr in self.curr_usrs:
+                    self.rl_actions.local_training(usr, epoch=0)
             if action == 1:
-                self.rl_actions.local_training(self.curr_usr, epoch=0)
-            if action == 2:
-                # self.rl_actions.lift_model(self.curr_usr, 0.05)
-                self.rl_actions.average_into_global()
-            if action == 3:
-                self.rl_actions.drop_model(self.curr_usr)
+                self.steps_since_last_aggregation = 0
+                self.rl_actions.average_into_global(1)
+                for usr in self.curr_usrs:
+                    self.rl_actions.drop_model(usr)
 
-            # Compute post-action global loss
-            post_action_global_loss = self.rl_actions.local_evaluation(-1)
-            usr_loss = self.rl_actions.local_evaluation(self.curr_usr)
-
-            observation = np.array([usr_loss, post_action_global_loss])
-            # reward = pre_action_global_loss - post_action_global_loss
-            reward = -post_action_global_loss
+            # Compute global loss
+            global_loss = self.rl_actions.local_test_evaluation(-1)
+            
+            if action == 1:
+                self.global_losses.append(global_loss)
+            
+            reward = pre_action_global_loss - global_loss
 
             if self.save_rewards_and_actions:
                 self.episode_rewards.append(reward)
@@ -133,8 +118,13 @@ class FedEnv(gym.Env):
             if self.curr_training_step == self.total_timesteps:
                 self.plot_actions_and_rewards()
 
+            dif1 = self.global_losses[-1] - self.global_losses[-2]
+            dif2 = self.global_losses[-2] - self.global_losses[-3]
+            observation = [self.steps_since_last_aggregation, dif1, dif1 - dif2]
+
+
         # Print out some information about the step taken
-        print(f"[RL Environment] [Step {self.curr_training_step}] User: {self.curr_usr} Action: {action}, Reward: {reward:+.8f}")
+        print(f"[RL Environment] [Step {self.curr_training_step}] Action: {self.action_dict[action]}, Reward: {reward:+.8f}")
 
         return observation, reward, done, info
 
@@ -195,15 +185,26 @@ class FedEnv(gym.Env):
         self.curr_step = 0
         self.episode_rewards = []
         self.episode_actions = []
+        self.global_losses = []
         self.rl_actions = RLActions(self.args, self.device, self.method)
 
         # Sample a new set of users
         self.sample_users()
 
         # Get the observation
-        global_loss = self.rl_actions.local_evaluation(-1)
-        usr_loss = self.rl_actions.local_evaluation(self.curr_usr)
+        self.steps_since_last_aggregation = 0
 
-        observation = np.array([usr_loss, global_loss])
-            
+        for _ in range(3):
+            for usr in self.curr_usrs:
+                self.rl_actions.local_training(usr, epoch=0)
+            self.rl_actions.average_into_global(1)
+            for usr in self.curr_usrs:
+                self.rl_actions.drop_model(usr)
+            global_loss = self.rl_actions.local_test_evaluation(-1)
+            self.global_losses.append(global_loss)
+
+        dif1 = self.global_losses[-1] - self.global_losses[-2]
+        dif2 = self.global_losses[-2] - self.global_losses[-3]
+        observation = [self.steps_since_last_aggregation, dif1, dif1 - dif2]
+
         return observation
