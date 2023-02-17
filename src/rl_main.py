@@ -16,62 +16,19 @@ from rl_environment import FedEnv
 from options import args_parser
 from utils import exp_details
 
-def make_env(device):
-    return lambda: FedEnv(args=args, device=device, method="fed_rl", save_loss=False, save_rewards_and_actions=True)
 
-def evaluate_no_actions(args):
-    print("Beginning evaluation, with no actions taken.")
-    env = FedEnv(args=args, device=0, method="fed_no_actions")
-    obs = env.reset()
-    done = False
-    while not done:
-        # Perform DoNothing action
-        action = 0
-        obs, reward, done, info = env.step(action)
-    print("Finished evaluation.")
+def make_env(device):
+    return lambda: FedEnv(args=args, device=device)
+
 
 def evaluate_rl(args):
-    print("Beginning policy network training with PPO.")
-    # save_loss is set to False during training; save_rewards_and_actions is set to True
+    print("[RL Main] Beginning policy network training with PPO.")
     env = SubprocVecEnv([make_env(f'cuda:{i}') for i in range(args.n_gpus)])
-    model = DQN("MlpPolicy", env, verbose=1, gamma=args.ppo_gamma, learning_starts=400, target_update_interval=1600)
-    # model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
+    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
     model.learn(total_timesteps=args.total_timesteps * args.n_gpus)
-    print("Finished training.")
-    print("Saving model to save/FedRL")
+    print("[RL Main] Finished training.")
+    print("[RL Main] Saving model to save/FedRL")
     model.save("save/FedRL")
-
-    # print("Beginning evaluation, with actions selected by policy network.")
-    # env = FedEnv(args=args, device=0, method="fed_rl")
-    # obs = env.reset()
-    # done = False
-    # while not done:
-    #     action, _ = model.predict(obs)
-    #     obs, reward, done, info = env.step(action)
-    # print("Finished evaluation")
-
-
-def evaluate_random(args):
-    print("Beginning evaluation, with actions taken at random.")
-    env = FedEnv(args=args, device=0, method="fed_random")
-    obs = env.reset()
-    done = False
-    while not done:
-        action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-    print("Finished evaluation.")
-
-
-def evaluate_avg(args):
-    print("Beginning evaluation, with FedAvg scheme.")
-    env = FedEnv(args=args, device=0, method="fed_avg")
-    obs = env.reset()
-    done = False
-    while not done:
-        # Perform DoNothing action
-        action = 0
-        obs, reward, done, info = env.step(action)
-    print("Finished evaluation.")
 
 
 if __name__ == '__main__':
@@ -101,11 +58,4 @@ if __name__ == '__main__':
 
     exp_details(args)
 
-    if args.method == "fed_no_actions" or args.method == "all":
-        evaluate_no_actions(args)
-    if args.method == "fed_rl" or args.method == "all":
-        evaluate_rl(args)
-    if args.method == "fed_random" or args.method == "all":
-        evaluate_random(args)
-    if args.method == "fed_avg" or args.method == "all":
-        evaluate_avg(args)
+    evaluate_rl(args)

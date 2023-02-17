@@ -8,8 +8,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 
 
 class DatasetSplit(Dataset):
-    """An abstract Dataset class wrapped around Pytorch Dataset class.
-    """
+    """An abstract Dataset class wrapped around Pytorch Dataset class."""
 
     def __init__(self, dataset, idxs):
         self.dataset = dataset
@@ -24,21 +23,24 @@ class DatasetSplit(Dataset):
 
 
 class LocalUpdate(object):
-    def __init__(self, args, device, dataset, idxs):
-        self.args = args
-        self.trainloader, self.validloader, self.testloader = self.train_val_test(
-            dataset, list(idxs))
+    def __init__(self, dataset, idxs, local_ep, local_bs, lr, optimizer, supervision, verbose, device):
+        self.local_ep = local_ep
+        self.local_bs = local_bs
+        self.lr = lr
+        self.optimizer = optimizer
+        self.supervision = supervision
+        self.verbose = verbose
         self.device = device
-        # self.device = 'cuda:'+str(args.gpu) if torch.cuda.is_available() else 'cpu'
-        # self.device = 'cuda' if args.gpu else 'cpu'
-        if args.supervision:
+
+        self.trainloader, self.validloader, self.testloader = self.train_val_test(dataset, list(idxs))
+
+        if self.supervision:
             # Supervised learning
             # Default criterion set to NLL loss function
             self.criterion = nn.NLLLoss().to(self.device)
         else:
             # Self-Supervised learning
             self.criterion = nn.MSELoss().to(self.device)
-    
 
     def train_val_test(self, dataset, idxs):
         """
@@ -46,38 +48,36 @@ class LocalUpdate(object):
         and user indexes.
         """
         # split indexes for train, validation, and test (80, 10, 10)
-        idxs_train = idxs[:int(0.8*len(idxs))]
-        idxs_val = idxs[int(0.8*len(idxs)):int(0.9*len(idxs))]
-        idxs_test = idxs[int(0.9*len(idxs)):]
+        idxs_train = idxs[: int(0.8 * len(idxs))]
+        idxs_val = idxs[int(0.8 * len(idxs)) : int(0.9 * len(idxs))]
+        idxs_test = idxs[int(0.9 * len(idxs)) :]
 
-        trainloader = DataLoader(DatasetSplit(dataset, idxs_train),
-                                 batch_size=self.args.local_bs, shuffle=True)
-        validloader = DataLoader(DatasetSplit(dataset, idxs_val),
-                                 batch_size=int(len(idxs_val)/10), shuffle=False)
-        testloader = DataLoader(DatasetSplit(dataset, idxs_test),
-                                batch_size=int(len(idxs_test)/10), shuffle=False)
+        trainloader = DataLoader(DatasetSplit(dataset, idxs_train), batch_size=self.local_bs, shuffle=True)
+        validloader = DataLoader(DatasetSplit(dataset, idxs_val), batch_size=int(len(idxs_val) / 10), shuffle=False)
+        testloader = DataLoader(DatasetSplit(dataset, idxs_test), batch_size=int(len(idxs_test) / 10), shuffle=False)
         return trainloader, validloader, testloader
 
-
-    def update_weights(self, model, global_round):
+    def update_weights(self, model, global_round, num_minibatches):
         # Set mode to train model
         model.train()
         epoch_loss = []
 
         # Set optimizer for the local updates
-        if self.args.optimizer == 'sgd':
-            optimizer = torch.optim.SGD(model.parameters(), lr=self.args.lr,
-                                        momentum=0.5)
-        elif self.args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(model.parameters(), lr=self.args.lr,
-                                         weight_decay=1e-4)
+        if self.optimizer == "sgd":
+            optimizer = torch.optim.SGD(model.parameters(), lr=self.lr, momentum=0.5)
+        elif self.optimizer == "adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=self.lr, weight_decay=1e-4)
 
-        if self.args.supervision:
+        if self.supervision:
             # Supervised learning
-            for iter in range(self.args.local_ep):
-                losses = []
+            minibatches = 0
+            # for iter in range(self.local_ep):
+            losses = []
+            while True:
                 for batch_idx, (images, labels) in enumerate(self.trainloader):
-
+                    if minibatches >= num_minibatches:
+                        return model.state_dict(), sum(losses) / len(losses)
+                    minibatches += 1
                     images, labels = images.to(self.device), labels.to(self.device)
 
                     model.zero_grad()
@@ -86,19 +86,24 @@ class LocalUpdate(object):
                     loss.backward()
                     optimizer.step()
 
-                    if self.args.verbose and (batch_idx % 10 == 0):
-                        print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            global_round + 1, iter, batch_idx * len(images),
-                            len(self.trainloader.dataset),
-                            100. * batch_idx / len(self.trainloader), loss.item()))
+                    if self.verbose and (batch_idx % 10 == 0):
+                        print(
+                            "| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
+                                global_round + 1,
+                                iter,
+                                batch_idx * len(images),
+                                len(self.trainloader.dataset),
+                                100.0 * batch_idx / len(self.trainloader),
+                                loss.item(),
+                            )
+                        )
                     losses.append(loss.item() / images.shape[0])
-
             return model.state_dict(), sum(losses) / len(losses)
 
         else:
             # Self-Supervised learning
             out = []
-            for iter in range(self.args.local_ep):
+            for iter in range(self.local_ep):
                 losses = []
                 for batch_idx, (images, _) in enumerate(self.trainloader):
                     images = images.to(self.device)
@@ -109,24 +114,30 @@ class LocalUpdate(object):
                     loss.backward()
                     optimizer.step()
 
-                    if self.args.verbose and (batch_idx % 10 == 0):
-                        print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                            global_round + 1, iter, batch_idx * len(images),
-                            len(self.trainloader.dataset),
-                            100. * batch_idx / len(self.trainloader), loss.item()))
+                    if self.verbose and (batch_idx % 10 == 0):
+                        print(
+                            "| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
+                                global_round + 1,
+                                iter,
+                                batch_idx * len(images),
+                                len(self.trainloader.dataset),
+                                100.0 * batch_idx / len(self.trainloader),
+                                loss.item(),
+                            )
+                        )
                     losses.append(loss.item() / images.shape[0])
-                out.append((iter, images, outputs),)
+                out.append(
+                    (iter, images, outputs),
+                )
 
             return model.state_dict(), sum(losses) / len(losses), out
 
-
     def inference(self, model):
-        """ Returns the inference accuracy and loss.
-        """
+        """Returns the inference accuracy and loss."""
 
         model.eval()
 
-        if self.args.supervision:
+        if self.supervision:
             # Supervised learning
             losses = []
             total, correct = 0.0, 0.0
@@ -159,15 +170,14 @@ class LocalUpdate(object):
                 outputs = model(images)
                 loss = self.criterion(outputs, images)
                 losses.append(loss.item() / images.shape[0])
-                
+
             loss = sum(losses) / len(losses)
             return None, loss
-    
-    
-    def process_samples(self, dataset, idxs, model):
-        dataloader = DataLoader(DatasetSplit(dataset, idxs), batch_size=int(len(idxs)/10), shuffle=False)
 
-        if self.args.supervision:
+    def process_samples(self, dataset, idxs, model):
+        dataloader = DataLoader(DatasetSplit(dataset, idxs), batch_size=int(len(idxs) / 10), shuffle=False)
+
+        if self.supervision:
             # Supervised learning
             output_list = []
             for batch_idx, (images, labels) in enumerate(dataloader):
@@ -190,17 +200,16 @@ class LocalUpdate(object):
         return output_list
 
 
-def test_inference(args, device, model, test_dataset):
-    """ Returns the test accuracy and loss.
-    """
+def test_inference(supervision, device, model, test_dataset, test_fraction):
+    """Returns the test accuracy and loss."""
 
     test_batch_size = 256
-    trimmed_test_dataset = Subset(test_dataset, range(int(len(test_dataset) * args.test_fraction)))
+    trimmed_test_dataset = Subset(test_dataset, range(int(len(test_dataset) * test_fraction)))
     testloader = DataLoader(trimmed_test_dataset, batch_size=test_batch_size, shuffle=False)
 
     model.eval()
 
-    if args.supervision:
+    if supervision:
         # Supervised learning
         # Default criterion set to NLL loss function
         criterion = nn.NLLLoss().to(device)
@@ -208,7 +217,7 @@ def test_inference(args, device, model, test_dataset):
         # Self-Supervised learning
         criterion = nn.MSELoss().to(device)
 
-    if args.supervision:
+    if supervision:
         # Supervised learning
         losses = []
         total, correct = 0.0, 0.0
@@ -237,7 +246,7 @@ def test_inference(args, device, model, test_dataset):
         # Self-Supervised learning
         losses = []
         for batch_idx, (images, labels) in enumerate(testloader):
-            
+
             images = images.to(device)
 
             # Inference

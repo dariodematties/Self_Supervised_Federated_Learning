@@ -7,26 +7,42 @@ import copy
 import torch
 import wandb
 
+import numpy as np
+
 from update import LocalUpdate, test_inference
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from models import AutoencoderMNIST
 from utils import get_dataset, weighted_average_weights, average_weights
 
+from sklearn.decomposition import PCA
+
 class RLActions():
 
-    def __init__(self, args, device, method):
+    def __init__(self, num_users, local_ep, local_bs, lr, optimizer, supervision, model, num_channels,
+    dataset, num_classes, iid, unequal, verbose, test_fraction, device):
         
-        self.args = args
+        self.num_users = num_users
+        self.local_ep = local_ep
+        self.local_bs = local_bs
+        self.lr = lr
+        self.optimizer = optimizer
+        self.supervision = supervision
+        self.model = model
+        self.num_channels = num_channels
+        self.dataset = dataset
+        self.num_classes = num_classes
+        self.iid = iid
+        self.unequal = unequal
+        self.verbose = verbose
+        self.test_fraction = test_fraction
         self.device = device
-        self.method = method
 
         # Load dataset
-        self.train_dataset, self.test_dataset, self.user_groups = get_dataset(args)
+        self.train_dataset, self.test_dataset, self.user_groups = get_dataset(num_users, dataset, iid, unequal)
 
         # Set up local models for each node
-        # TODO: make sure this is actually calling self.get_model separate times
-        self.local_models = {i: self.get_model(self.args) for i in range(args.num_users)}
-        self.global_model = self.get_model(self.args)
+        self.local_models = {i: self.get_model(supervision, model, dataset, num_channels, num_classes) for i in range(num_users)}
+        self.global_model = self.get_model(supervision, model, dataset, num_channels, num_classes)
 
         # Output model information
         print()
@@ -39,34 +55,34 @@ class RLActions():
         self.global_test_accuracies = []
 
 
-    def get_model(self, args):
-        if args.supervision:
+    def get_model(self, supervision, model, dataset, num_channels, num_classes):
+        if supervision:
             # Supervised learning
-            if args.model == 'cnn':
+            if model == 'cnn':
                 # Convolutional neural netork
-                if args.dataset == 'mnist':
-                    model = CNNMnist(args=args)
-                elif args.dataset == 'fmnist':
-                    model = CNNFashion_Mnist(args=args)
-                elif args.dataset == 'cifar':
-                    model = CNNCifar(args=args)
+                if dataset == 'mnist':
+                    model = CNNMnist(num_channels, num_classes)
+                elif dataset == 'fmnist':
+                    model = CNNFashion_Mnist()
+                elif dataset == 'cifar':
+                    model = CNNCifar(num_classes)
 
-            elif args.model == 'mlp':
+            elif model == 'mlp':
                 # Multi-layer preceptron
                 img_size = self.train_dataset[0][0].shape
                 len_in = 1
                 for x in img_size:
                     len_in *= x
                 model = MLP(dim_in=len_in, dim_hidden=64,
-                            dim_out=args.num_classes)
+                            dim_out=num_classes)
             else:
                 exit('Error: unrecognized model')
         else:
             # Self-supervised learning
-            if args.model == 'autoencoder':
+            if model == 'autoencoder':
                 # Autoencoder with transpose convolutions
-                if args.dataset == 'mnist':
-                    model = AutoencoderMNIST(args=args)
+                if dataset == 'mnist':
+                    model = AutoencoderMNIST(num_channels)
 
             else:
                 exit('Error: unrecognized unsupervised model')
@@ -117,7 +133,7 @@ class RLActions():
         self.local_models[usr].load_state_dict(global_model_weights)
 
 
-    def local_training(self, usr, epoch):
+    def local_training(self, usr, epoch, num_minibatches):
         """
         Perform local training for the specified user.
 
@@ -127,21 +143,24 @@ class RLActions():
             the user for which to perform local training
         epoch: int
             the current global training round
+        num_minibatches: int
+            the number of minibatches to train on
         """
 
         # Create a LocalUpdate object for the current user
-        local_model = LocalUpdate(args=self.args, device=self.device,
-                    dataset=self.train_dataset, idxs=self.user_groups[usr])
+        local_model = LocalUpdate(
+            self.train_dataset, self.user_groups[usr], self.local_ep, self.local_bs, self.lr, self.optimizer, self.supervision,
+            self.verbose, self.device)
 
         # Perform local training for the current user
-        if self.args.supervision:
+        if self.supervision:
             # Supervised learning
             w, loss = local_model.update_weights(
-                model=self.local_models[usr], global_round=epoch)
+                model=self.local_models[usr], global_round=epoch, num_minibatches=num_minibatches)
         else:
             # Self-supervised learning
             w, loss, out = local_model.update_weights(
-                    model=self.local_models[usr], global_round=epoch)
+                    model=self.local_models[usr], global_round=epoch, num_minibatches=num_minibatches)
 
         return loss
 
@@ -163,8 +182,9 @@ class RLActions():
         """
 
         # Create a LocalUpdate object for the current user
-        local_model = LocalUpdate(args=self.args, device=self.device,
-                    dataset=self.train_dataset, idxs=self.user_groups[usr])
+        local_model = LocalUpdate(
+            self.train_dataset, self.user_groups[usr], self.local_ep, self.local_bs, self.lr, self.optimizer, self.supervision,
+            self.verbose, self.device)
 
         # Perform local train evaluation for the current user
         _, loss = local_model.inference(model=self.local_models[usr])
@@ -183,28 +203,41 @@ class RLActions():
             
         Returns
         -------
-        loss: float
-            the current loss for the specified user
+        acc: float
+            the current accuracy for the specified user
         """
 
         # Perform local evaluation for the specified user
         model = self.global_model if usr == -1 else self.local_models[usr]
-        acc, loss = test_inference(self.args, self.device, model, self.test_dataset)
+        acc, loss = test_inference(self.supervision, self.device, model, self.test_dataset, self.test_fraction)
         
         if usr == -1 and save_loss:
             self.global_test_losses.append(loss)
-            if self.args.supervision:
+            if self.supervision:
                 self.global_test_accuracies.append(acc)
 
-        return loss
+        return acc
 
 
-    def plot_global_loss(self):
-        data = [[step, loss] for (step, loss) in enumerate(self.global_test_losses)]
+    def plot_global_acc(self):
+        data = [[step, acc] for (step, acc) in enumerate(self.global_test_accs)]
         table = wandb.Table(data=data, columns=["Step", "Global Test Loss"])
-        wandb.log({"global-test-losses": wandb.plot.line(table, "Step", "Global Test Loss", title="Global Test Loss vs. Training Step")})
+        wandb.log({"global-test-losses": wandb.plot.line(table, "Step", "Global Test Accuracy", title="Global Test Accuracy vs. Training Step")})
     
-        if self.args.supervision:
+        if self.supervision:
             data = [[step, accuracy] for (step, accuracy) in enumerate(self.global_test_accuracies)]
             table = wandb.Table(data=data, columns=["Step", "Global Test Accuracy"])
             wandb.log({"global-test-accuracy": wandb.plot.line(table, "Step", "Global Test Accuracy", title="Global Test Accuracy vs. Training Step")})
+
+    
+    def compute_pca_loading_vectors(self):
+        self.pca = PCA(n_components=5)
+        global_parameters = torch.cat([p.flatten() for p in self.global_model.parameters()]).detach().cpu().numpy()
+        local_parameters = [torch.cat([p.flatten() for p in model.parameters()]).detach().cpu().numpy() for model in self.local_models.values()]
+        self.pca.fit([global_parameters, *local_parameters])
+    
+    
+    def get_pca_reduced_models(self):
+        global_parameters = torch.cat([p.flatten() for p in self.global_model.parameters()]).detach().cpu().numpy()
+        local_parameters = [torch.cat([p.flatten() for p in model.parameters()]).detach().cpu().numpy() for model in self.local_models.values()]
+        return self.pca.transform([global_parameters, *local_parameters])

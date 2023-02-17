@@ -5,70 +5,72 @@
 import copy
 import torch
 from torchvision import datasets, transforms
-from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal, mnist_noniid_custom
+from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal, mnist_noniid_custom, mnist_dirichlet
 from sampling import cifar_iid, cifar_noniid
 
 
-def get_dataset(args):
-    """ Returns train and test datasets and a user group which is a dict where
+def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, sharing=False):
+    """Returns train and test datasets and a user group which is a dict where
     the keys are the user index and the values are the corresponding data for
     each of those users.
     """
 
-    if args.dataset == 'cifar':
-        data_dir = '../data/cifar/'
+    if dirichlet and alpha is None:
+        raise ValueError("If dirichlet is True, alpha must be specified.")
+
+    if dataset == "cifar":
+        data_dir = "../data/cifar/"
         apply_transform = transforms.Compose(
-            [transforms.ToTensor(),
-             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ]
+        )
 
-        train_dataset = datasets.CIFAR10(data_dir, train=True, download=True,
-                                       transform=apply_transform)
+        train_dataset = datasets.CIFAR10(data_dir, train=True, download=True, transform=apply_transform)
 
-        test_dataset = datasets.CIFAR10(data_dir, train=False, download=True,
-                                      transform=apply_transform)
+        test_dataset = datasets.CIFAR10(data_dir, train=False, download=True, transform=apply_transform)
 
         # sample training data amongst users
-        if args.iid:
+        if iid:
             # Sample IID user data from Mnist
-            user_groups = cifar_iid(train_dataset, args.num_users)
+            user_groups = cifar_iid(train_dataset, num_users)
         else:
             # Sample Non-IID user data from Mnist
-            if args.unequal:
+            if unequal:
                 # Chose unequal splits for every user
                 raise NotImplementedError()
             else:
                 # Chose equal splits for every user
-                user_groups = cifar_noniid(train_dataset, args.num_users)
+                user_groups = cifar_noniid(train_dataset, num_users)
 
-    elif args.dataset == 'mnist' or 'fmnist':
-        if args.dataset == 'mnist':
-            data_dir = '../data/mnist/'
+    elif dataset == "mnist" or "fmnist":
+        if dataset == "mnist":
+            data_dir = "../data/mnist/"
         else:
-            data_dir = '../data/fmnist/'
+            data_dir = "../data/fmnist/"
 
-        apply_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))])
+        apply_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
-        train_dataset = datasets.MNIST(data_dir, train=True, download=True,
-                                       transform=apply_transform)
+        train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=apply_transform)
 
-        test_dataset = datasets.MNIST(data_dir, train=False, download=True,
-                                      transform=apply_transform)
+        test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=apply_transform)
 
         # sample training data amongst users
-        if args.iid:
+        if iid:
             # Sample IID user data from Mnist
-            user_groups = mnist_iid(train_dataset, args.num_users)
+            user_groups = mnist_iid(train_dataset, num_users)
         else:
             # Sample Non-IID user data from Mnist
-            if args.unequal:
+            if dirichlet:
+                user_groups = mnist_dirichlet(train_dataset, num_users, alpha, sharing)
+            elif unequal:
                 # Chose unequal splits for every user
-                user_groups = mnist_noniid_unequal(train_dataset, args.num_users)
+                user_groups = mnist_noniid_unequal(train_dataset, num_users)
             else:
                 # Chose equal splits for every user
-                user_groups = mnist_noniid_custom(train_dataset, args.num_users)
-                # user_groups = mnist_noniid(train_dataset, args.num_users)
+                # user_groups = mnist_noniid_custom(train_dataset, num_users)
+                user_groups = mnist_noniid(train_dataset, num_users)
 
     return train_dataset, test_dataset, user_groups
 
@@ -99,18 +101,35 @@ def weighted_average_weights(state_dicts, weights):
 
 
 def exp_details(args):
-    print('\nExperimental details:')
-    print(f'    Model     : {args.model}')
-    print(f'    Optimizer : {args.optimizer}')
-    print(f'    Learning  : {args.lr}')
-    print(f'    Global Rounds   : {args.epochs}\n')
+    print("\nExperimental details:")
 
-    print('    Federated parameters:')
-    if args.iid:
-        print('    IID')
-    else:
-        print('    Non-IID')
-    print(f'    Fraction of users  : {args.frac}')
-    print(f'    Local Batch size   : {args.local_bs}')
-    print(f'    Local Epochs       : {args.local_ep}\n')
-    return
+    print("\nReinforcement Arguments:")
+    print(f"    Steps Before PPO Update : {args.ppo_n_steps}")
+    print(f"    PPO Learning Rate       : {args.ppo_lr}")
+    print(f"    PPO Discount Factor     : {args.ppo_gamma}")
+    print(f"    PPO Batch Size          : {args.ppo_bs}")
+    print(f"    PPO Total Timesteps     : {args.total_timesteps}")
+    print(f"    Target Accuracy         : {args.target_accuracy}")
+
+    print("\nFederated Arguments:")
+    print(f"    Number of Users         : {args.num_users}")
+    print(f"    Fraction of Users       : {args.frac}")
+    print(f"    Local Epochs            : {args.local_ep}")
+    print(f"    Local Batch Size        : {args.local_bs}")
+    print(f"    Learning Rate           : {args.lr}")
+    print(f"    Momentum                : {args.momentum}")
+    print(f"    Optimizer               : {args.optimizer}")
+
+    print("\nModel Arguments:")
+    print(f"    Supervision             : {args.supervision}")
+    print(f"    Model                   : {args.model}")
+
+    print("\nMisc. Arguments:")
+    print(f"    Dataset                 : {args.dataset}")
+    print(f"    Number of GPUs          : {args.n_gpus}")
+    print(f"    IID                     : {args.iid}")
+    print(f"    Unequal                 : {args.unequal}")
+    print(f"    Random Seed             : {args.seed}")
+    print(f"    Test Fraction           : {args.test_fraction}")
+
+    print()
