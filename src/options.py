@@ -43,20 +43,20 @@ def args_parser():
     parser.add_argument(
         "--total_timesteps",
         type=int,
-        default=5000,
+        default=15_000,
         help="total timesteps for training policy network, per parallel environment",
     )
     parser.add_argument(
         "--target_accuracy",
         type=float,
-        default=0.875,
+        default=0.95,
         help="target accuracy for global model",
     )
 
     # federated arguments
     parser.add_argument("--num_users", type=int, default=100, help="number of users: K")
     parser.add_argument("--frac", type=float, default=0.1, help="the fraction of clients: C")
-    parser.add_argument("--local_ep", type=int, default=5, help="the number of local epochs: E")
+    parser.add_argument("--local_ep", type=int, default=1, help="the number of local epochs: E")
     parser.add_argument("--local_bs", type=int, default=10, help="local batch size: B")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument("--momentum", type=float, default=0.5, help="SGD momentum")
@@ -106,8 +106,7 @@ def args_parser():
         "--dataset",
         type=str,
         default="mnist",
-        help="name \
-                        of dataset",
+        help="name of dataset",
     )
     parser.add_argument(
         "--num_classes",
@@ -126,15 +125,26 @@ def args_parser():
         type=int,
         help="The number of GPUs to use for training.",
     )
-    parser.add_argument("--iid", type=int, default=1, help="Default set to IID. Set to 0 for non-IID.")
+    parser.add_argument("--iid", type=int, default=0, help="Default set to non-IID. Set to 1 for IID.")
     parser.add_argument(
         "--unequal",
         type=int,
         default=0,
         help="whether to use unequal data splits for non-i.i.d setting (use 0 for equal splits)",
     )
+    parser.add_argument(
+        "--dirichlet",
+        type=bool,
+        default=True,
+        help="whether to use a Dirichlet distribution to draw samples for each user",
+    )
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1,
+        help="the alpha value governing the non-IID nature of the Dirichlet distribution",
+    )
     parser.add_argument("--stopping_rounds", type=int, default=10, help="rounds of early stopping")
-    parser.add_argument("--verbose", type=int, default=0, help="verbose")
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     parser.add_argument(
         "--test_fraction",

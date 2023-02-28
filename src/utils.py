@@ -3,13 +3,16 @@
 # Python version: 3.6
 
 import copy
+
 import torch
 from torchvision import datasets, transforms
-from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal, mnist_noniid_custom, mnist_dirichlet
+
+from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal
 from sampling import cifar_iid, cifar_noniid
+from sampling import dirichlet_sampling
 
 
-def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, sharing=False):
+def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, shared_sample_ratio=False):
     """Returns train and test datasets and a user group which is a dict where
     the keys are the user index and the values are the corresponding data for
     each of those users.
@@ -33,11 +36,13 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
 
         # sample training data amongst users
         if iid:
-            # Sample IID user data from Mnist
+            # Sample IID user data from CIFAR
             user_groups = cifar_iid(train_dataset, num_users)
         else:
-            # Sample Non-IID user data from Mnist
-            if unequal:
+            # Sample Non-IID user data from CIFAR
+            if dirichlet:
+                user_groups = dirichlet_sampling(train_dataset, num_users, alpha, shared_sample_ratio)
+            elif unequal:
                 # Chose unequal splits for every user
                 raise NotImplementedError()
             else:
@@ -63,7 +68,7 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
         else:
             # Sample Non-IID user data from Mnist
             if dirichlet:
-                user_groups = mnist_dirichlet(train_dataset, num_users, alpha, sharing)
+                user_groups = dirichlet_sampling(train_dataset, num_users, alpha, shared_sample_ratio)
             elif unequal:
                 # Chose unequal splits for every user
                 user_groups = mnist_noniid_unequal(train_dataset, num_users)

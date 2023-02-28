@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 # Python version: 3.6
 
-import gym
-from gym import spaces
+import numpy as np
+import math
 
 import wandb
 
-import numpy as np
-import math
+import gym
+from gym import spaces
 
 from rl_actions import RLActions
 
@@ -44,15 +44,19 @@ class FedEnv(gym.Env):
         self.optimizer = args.optimizer
         self.iid = args.iid
         self.unequal = args.unequal
-        self.verbose = args.verbose
+        self.dirichlet = args.dirichlet
+        self.alpha = args.alpha
         self.test_fraction = args.test_fraction
 
         # Set up logging with Weights & Biases
         if self.wandb:
-            wandb.init(config=vars(args), group="choose-mb-5")
+            wandb.init(config=vars(args), group="choose-weights-3")
 
-        self.action_space = spaces.Box(low=0.0, high=1.0, shape=(1,))
-        self.observation_space = spaces.Box(low=-math.inf, high=math.inf, shape=(self.num_users + 1, 5))
+        np.set_printoptions(precision=3)
+
+        users_per_round = int(self.num_users * self.frac)
+        self.action_space = spaces.Box(low=0.001, high=1.0, shape=(users_per_round,))
+        self.observation_space = spaces.Box(low=-math.inf, high=math.inf, shape=(users_per_round + 1, users_per_round))
 
     def step(self, action):
 
@@ -79,22 +83,17 @@ class FedEnv(gym.Env):
 
         observation, reward, done, info = np.array([0, 0]), 0, False, {}
 
-        num_minibatches = int(action[0] * 29 + 1)
+        weights = np.array(action) / sum(action)
 
-        for usr in self.curr_usrs:
-            self.rl_actions.local_training(usr=usr, epoch=0, num_minibatches=num_minibatches)
+        self.rl_actions.distribute_global_model(self.curr_usrs)
 
-        # Get observation with PCA
-        observation = self.rl_actions.get_pca_reduced_models()
-        self.rl_actions.average_into_global(1)
+        self.rl_actions.local_training(self.curr_usrs, self.local_ep)
+        self.rl_actions.aggregate_models(self.curr_usrs, weights)
 
         # Compute global loss
         global_acc = self.rl_actions.local_test_evaluation(-1)
         self.global_accs.append(global_acc)
         reward = 64 ** (global_acc - self.target_accuracy) - 1
-
-        for usr in self.curr_usrs:
-            self.rl_actions.drop_model(usr)
 
         self.episode_rewards.append(reward)
         self.episode_actions.append(action)
@@ -105,9 +104,6 @@ class FedEnv(gym.Env):
             self.all_actions.append(self.episode_actions)
             self.all_steps.append(self.curr_step)
 
-            self.episode_rewards = []
-            self.episode_actions = []
-
             done = True
 
         if self.curr_training_step == self.total_timesteps and self.wandb:
@@ -115,8 +111,13 @@ class FedEnv(gym.Env):
 
         # Print out some information about the step taken
         print(
-            f"[RL Environment] [Step {self.curr_training_step:{'0'}{4}}] Action: {num_minibatches}, Acc: {global_acc:.3f}, Reward: {reward:.3f}"
+            f"[RL Environment] [Step {self.curr_training_step:{'0'}{4}}] Action: {weights}, Acc: {global_acc:.3f}, Reward: {reward:.3f}"
         )
+
+        # Sample users and get next observation
+        self.sample_users()
+        observation = self.rl_actions.get_pca_reduced_models(self.curr_usrs)
+
         return observation, reward, done, info
 
     def sample_users(self):
@@ -130,12 +131,8 @@ class FedEnv(gym.Env):
         # Sample the users without replacement
         self.curr_usrs = np.random.choice(range(self.num_users), m, replace=False)
 
-        # Set the index of the current user to the first user in the sampled list
-        self.idx_curr_usr = 0
-        self.curr_usr = self.curr_usrs[self.idx_curr_usr]
-
         # Print out the sampled users
-        print(f"[RL Environment] Sampled Users: {self.curr_usrs}")
+        # print(f"[RL Environment] Sampled Users: {self.curr_usrs}")
 
     def plot_actions_and_rewards(self):
         print("[RL Environment] Plotting actions and rewards")
@@ -191,7 +188,7 @@ class FedEnv(gym.Env):
         self.global_accs = []
         self.rl_actions = RLActions(
             self.num_users,
-            self.local_ep,
+            self.frac,
             self.local_bs,
             self.lr,
             self.optimizer,
@@ -202,19 +199,18 @@ class FedEnv(gym.Env):
             self.num_classes,
             self.iid,
             self.unequal,
-            self.verbose,
+            self.dirichlet,
+            self.alpha,
             self.test_fraction,
             self.device,
         )
 
         self.sample_users()
 
-        for usr in self.curr_usrs:
-            self.rl_actions.local_training(usr=usr, epoch=0, num_minibatches=23)
-        self.rl_actions.compute_pca_loading_vectors()
-        observation = self.rl_actions.get_pca_reduced_models()
-        self.rl_actions.average_into_global(1)
-        for usr in self.curr_usrs:
-            self.rl_actions.drop_model(usr)
+        self.rl_actions.local_training(self.curr_usrs, self.local_ep)
+        self.rl_actions.aggregate_models(self.curr_usrs, [1 / len(self.curr_usrs)] * len(self.curr_usrs))
+
+        self.rl_actions.compute_pca_loading_vectors(self.curr_usrs)
+        observation = self.rl_actions.get_pca_reduced_models(self.curr_usrs)
 
         return observation

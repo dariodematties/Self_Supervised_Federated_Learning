@@ -23,21 +23,20 @@ class DatasetSplit(Dataset):
 
 
 class LocalUpdate(object):
-    def __init__(self, dataset, idxs, local_ep, local_bs, lr, optimizer, supervision, verbose, device):
+    def __init__(self, dataset, idxs, local_ep, local_bs, lr, optimizer, supervision, device):
         self.local_ep = local_ep
         self.local_bs = local_bs
         self.lr = lr
         self.optimizer = optimizer
         self.supervision = supervision
-        self.verbose = verbose
         self.device = device
 
         self.trainloader, self.validloader, self.testloader = self.train_val_test(dataset, list(idxs))
 
         if self.supervision:
             # Supervised learning
-            # Default criterion set to NLL loss function
-            self.criterion = nn.NLLLoss().to(self.device)
+            # Default criterion set to CrossEntropy loss function
+            self.criterion = nn.CrossEntropyLoss().to(self.device)
         else:
             # Self-Supervised learning
             self.criterion = nn.MSELoss().to(self.device)
@@ -57,10 +56,9 @@ class LocalUpdate(object):
         testloader = DataLoader(DatasetSplit(dataset, idxs_test), batch_size=int(len(idxs_test) / 10), shuffle=False)
         return trainloader, validloader, testloader
 
-    def update_weights(self, model, global_round, num_minibatches):
+    def update_weights(self, model):
         # Set mode to train model
         model.train()
-        epoch_loss = []
 
         # Set optimizer for the local updates
         if self.optimizer == "sgd":
@@ -70,14 +68,9 @@ class LocalUpdate(object):
 
         if self.supervision:
             # Supervised learning
-            minibatches = 0
-            # for iter in range(self.local_ep):
-            losses = []
-            while True:
+            for iter in range(self.local_ep):
+                losses = []
                 for batch_idx, (images, labels) in enumerate(self.trainloader):
-                    if minibatches >= num_minibatches:
-                        return model.state_dict(), sum(losses) / len(losses)
-                    minibatches += 1
                     images, labels = images.to(self.device), labels.to(self.device)
 
                     model.zero_grad()
@@ -86,17 +79,6 @@ class LocalUpdate(object):
                     loss.backward()
                     optimizer.step()
 
-                    if self.verbose and (batch_idx % 10 == 0):
-                        print(
-                            "| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
-                                global_round + 1,
-                                iter,
-                                batch_idx * len(images),
-                                len(self.trainloader.dataset),
-                                100.0 * batch_idx / len(self.trainloader),
-                                loss.item(),
-                            )
-                        )
                     losses.append(loss.item() / images.shape[0])
             return model.state_dict(), sum(losses) / len(losses)
 
@@ -114,17 +96,6 @@ class LocalUpdate(object):
                     loss.backward()
                     optimizer.step()
 
-                    if self.verbose and (batch_idx % 10 == 0):
-                        print(
-                            "| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
-                                global_round + 1,
-                                iter,
-                                batch_idx * len(images),
-                                len(self.trainloader.dataset),
-                                100.0 * batch_idx / len(self.trainloader),
-                                loss.item(),
-                            )
-                        )
                     losses.append(loss.item() / images.shape[0])
                 out.append(
                     (iter, images, outputs),
@@ -211,8 +182,8 @@ def test_inference(supervision, device, model, test_dataset, test_fraction):
 
     if supervision:
         # Supervised learning
-        # Default criterion set to NLL loss function
-        criterion = nn.NLLLoss().to(device)
+        # Default criterion set to CrossEntropy loss function
+        criterion = nn.CrossEntropyLoss().to(device)
     else:
         # Self-Supervised learning
         criterion = nn.MSELoss().to(device)

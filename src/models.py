@@ -36,7 +36,7 @@ class CNNMnist(nn.Module):
         x = F.max_pool2d(self.conv2(x), 2)
         x = x.view(-1, x.shape[1] * x.shape[2] * x.shape[3])
         x = F.relu(self.fc(x))
-        return F.log_softmax(x, dim=1)
+        return F.softmax(x, dim=1)
 
 
 class CNNFashion_Mnist(nn.Module):
@@ -75,7 +75,7 @@ class CNNCifar(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        return F.log_softmax(x, dim=1)
+        return F.softmax(x, dim=1)
 
 
 class modelC(nn.Module):

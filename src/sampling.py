@@ -5,10 +5,11 @@
 
 import numpy as np
 from scipy.stats import dirichlet
+
 from torchvision import datasets, transforms
 
 
-def mnist_dirichlet(dataset, num_users, alpha, sharing=False):
+def dirichlet_sampling(dataset, num_users, alpha, shared_sample_ratio=0):
     """
     Sample client data by drawing populations from a Dirichlet distribution
     For more details, see https://arxiv.org/pdf/1909.06335.pdf
@@ -25,13 +26,16 @@ def mnist_dirichlet(dataset, num_users, alpha, sharing=False):
     """
     dict_users = {}
     alphas = np.array([alpha * 0.1] * 10)
-    labels = dataset.targets.numpy()
+    labels = np.array(dataset.targets)
     selected = np.array([0] * len(dataset))
     all_samples = np.arange(len(dataset))
-    print()
+    # print()
+    num_samples = 25_000
+    num_unshared_samples = num_samples * (1 - shared_sample_ratio)
+    num_shared_samples = num_samples * shared_sample_ratio
+    num_samples_per_user = num_unshared_samples // num_users
     for i in range(num_users):
-        num_samples_per_label = np.rint((dirichlet.rvs(alphas, size=1)[0] * 300)).astype(int)
-        # num_samples_per_label = [30] * 10
+        num_samples_per_label = np.rint((dirichlet.rvs(alphas, size=1)[0] * num_samples_per_user)).astype(int)
         user_samples = set()
         for label, num_samples in enumerate(num_samples_per_label):
             label_samples = all_samples[(selected == 0) & (labels == label)]
@@ -39,17 +43,17 @@ def mnist_dirichlet(dataset, num_users, alpha, sharing=False):
             selected[samples] = 1
             user_samples.update(samples)
         dict_users[i] = user_samples
-        print(
-            f"Labels for User {i}: {list(map(lambda n: np.count_nonzero(labels[list(dict_users[i])] == n), range(10)))}"
-        )
-    if sharing:
-        num_samples_per_label = [10] * 10
-        for label, num_samples in enumerate(num_samples_per_label):
-            label_samples = all_samples[(selected == 0) & (labels == label)]
-            samples = np.random.choice(label_samples, num_samples, replace=False)
-            selected[samples] = 1
+    num_samples_per_label = [int(0.1 * num_shared_samples)] * 10
+    for label, num_samples in enumerate(num_samples_per_label):
+        label_samples = all_samples[(selected == 0) & (labels == label)]
+        samples = np.random.choice(label_samples, num_samples, replace=False)
+        selected[samples] = 1
         for i in range(num_users):
             dict_users[i].update(samples)
+    # for i in range(num_users):
+    #     print(
+    #         f"Labels for User {i}: {list(map(lambda n: np.count_nonzero(labels[list(dict_users[i])] == n), range(10)))}"
+    #     )
     return dict_users
 
 
@@ -98,45 +102,6 @@ def mnist_noniid(dataset, num_users):
         idx_shard = list(set(idx_shard) - rand_set)
         for rand in rand_set:
             dict_users[i] = np.concatenate((dict_users[i], idxs[rand * num_imgs : (rand + 1) * num_imgs]), axis=0)
-    return dict_users
-
-
-def mnist_noniid_custom(dataset, num_users):
-    """
-    Sample non-I.I.D client data from MNIST dataset
-    :param dataset:
-    :param num_users:
-    :return:
-    """
-    # 60,000 training imgs -->  300 imgs/shard X 200 shards
-    num_shards, num_imgs = 5, 12000
-    # num_shards, num_imgs = 60, 1000
-    idx_shard = [i for i in range(num_shards)]
-    dict_users = {i: np.array([], dtype=int) for i in range(num_users)}
-    idxs = np.arange(num_shards * num_imgs)
-    labels = dataset.targets.numpy()
-
-    # sort labels
-    idxs_labels = np.vstack((idxs, labels))
-    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort()]
-    idxs = idxs_labels[0, :]
-
-    # divide and assign 1 shard/client
-    # use only 1/4 of samples to speed up training
-    print()
-
-    for i in range(num_users):
-        rand_set = set(np.random.choice(idx_shard, 1, replace=False))
-        idx_shard = list(set(idx_shard) - rand_set)
-        for rand in rand_set:
-            rand_idxs = idxs[rand * num_imgs : (rand + 1) * num_imgs]
-            dict_users[i] = np.concatenate((dict_users[i], [idx for idx in rand_idxs if idx % 4 == 0]), axis=0)
-            # dict_users[i] = np.concatenate((dict_users[i], rand_idxs), axis=0)
-
-        # print(dict_users[i])
-
-        print(f"Labels for User {i}: {list(map(lambda n: np.count_nonzero(labels[dict_users[i]] == n), range(10)))}")
-
     return dict_users
 
 
