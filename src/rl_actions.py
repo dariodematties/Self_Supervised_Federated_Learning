@@ -36,7 +36,6 @@ class RLActions:
         test_fraction,
         device,
     ):
-
         self.num_users = num_users
         self.frac = frac
         self.local_bs = local_bs
@@ -55,15 +54,19 @@ class RLActions:
         self.device = device
 
         # Load dataset
+        # TODO: UPDATE THIS FUNCTION CALL TO CONFORM TO NEW get_dataset API
         self.train_dataset, self.test_dataset, self.user_groups = get_dataset(
             num_users, dataset, iid, unequal, dirichlet, alpha
         )
 
         # Set up local models for each node
         self.local_models = {
-            i: self.get_model(supervision, model, dataset, num_channels, num_classes) for i in range(num_users)
+            i: self.get_model(supervision, model, dataset, num_channels, num_classes)
+            for i in range(num_users)
         }
-        self.global_model = self.get_model(supervision, model, dataset, num_channels, num_classes)
+        self.global_model = self.get_model(
+            supervision, model, dataset, num_channels, num_classes
+        )
 
         # Output model information
         print()
@@ -112,7 +115,11 @@ class RLActions:
         return model
 
     def aggregate_models(self, usrs, weights):
-        local_model_weights = [model.state_dict() for usr, model in self.local_models.items() if usr in usrs]
+        local_model_weights = [
+            model.state_dict()
+            for usr, model in self.local_models.items()
+            if usr in usrs
+        ]
         new_global_weights = weighted_average_weights(local_model_weights, weights)
         self.global_model.load_state_dict(new_global_weights)
 
@@ -211,7 +218,9 @@ class RLActions:
 
         # Perform local evaluation for the specified user
         model = self.global_model if usr == -1 else self.local_models[usr]
-        acc, loss = test_inference(self.supervision, self.device, model, self.test_dataset, self.test_fraction)
+        acc, loss = test_inference(
+            self.supervision, self.device, model, self.test_dataset, self.test_fraction
+        )
 
         if usr == -1 and save_loss:
             self.global_test_losses.append(loss)
@@ -226,18 +235,27 @@ class RLActions:
         wandb.log(
             {
                 "global-test-losses": wandb.plot.line(
-                    table, "Step", "Global Test Accuracy", title="Global Test Accuracy vs. Training Step"
+                    table,
+                    "Step",
+                    "Global Test Accuracy",
+                    title="Global Test Accuracy vs. Training Step",
                 )
             }
         )
 
         if self.supervision:
-            data = [[step, accuracy] for (step, accuracy) in enumerate(self.global_test_accuracies)]
+            data = [
+                [step, accuracy]
+                for (step, accuracy) in enumerate(self.global_test_accuracies)
+            ]
             table = wandb.Table(data=data, columns=["Step", "Global Test Accuracy"])
             wandb.log(
                 {
                     "global-test-accuracy": wandb.plot.line(
-                        table, "Step", "Global Test Accuracy", title="Global Test Accuracy vs. Training Step"
+                        table,
+                        "Step",
+                        "Global Test Accuracy",
+                        title="Global Test Accuracy vs. Training Step",
                     )
                 }
             )
@@ -245,7 +263,12 @@ class RLActions:
     def compute_pca_loading_vectors(self, usrs):
         users_per_round = int(self.num_users * self.frac)
         self.pca = PCA(n_components=users_per_round)
-        global_parameters = torch.cat([p.flatten() for p in self.global_model.parameters()]).detach().cpu().numpy()
+        global_parameters = (
+            torch.cat([p.flatten() for p in self.global_model.parameters()])
+            .detach()
+            .cpu()
+            .numpy()
+        )
         local_parameters = [
             torch.cat([p.flatten() for p in model.parameters()]).detach().cpu().numpy()
             for usr, model in self.local_models.items()
@@ -254,7 +277,12 @@ class RLActions:
         self.pca.fit([global_parameters, *local_parameters])
 
     def get_pca_reduced_models(self, usrs):
-        global_parameters = torch.cat([p.flatten() for p in self.global_model.parameters()]).detach().cpu().numpy()
+        global_parameters = (
+            torch.cat([p.flatten() for p in self.global_model.parameters()])
+            .detach()
+            .cpu()
+            .numpy()
+        )
         local_parameters = [
             torch.cat([p.flatten() for p in model.parameters()]).detach().cpu().numpy()
             for usr, model in self.local_models.items()

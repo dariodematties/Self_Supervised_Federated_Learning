@@ -9,17 +9,39 @@ from torchvision import datasets, transforms
 
 from sampling import mnist_iid, mnist_noniid, mnist_noniid_unequal
 from sampling import cifar_iid, cifar_noniid
-from sampling import dirichlet_sampling
+from sampling import dirichlet_sampling, dominant_label_sampling, missing_label_sampling
 
 
-def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, shared_sample_ratio=False):
+def get_dataset(
+    num_users,
+    dataset,
+    iid,
+    unequal,
+    method="dominant_label",
+    alpha=None,
+    beta=0,
+    gamma=None,
+    num_missing_labels=None,
+    subset=True,
+    save_path=None,
+):
     """Returns train and test datasets and a user group which is a dict where
     the keys are the user index and the values are the corresponding data for
     each of those users.
     """
+    if method not in ["shards", "dirichlet", "dominant_label", "missing_label"]:
+        raise ValueError("method must be shards, dirichlet, or dominant_label")
 
-    if dirichlet and alpha is None:
-        raise ValueError("If dirichlet is True, alpha must be specified.")
+    if method == "dirichlet" and alpha is None:
+        raise ValueError("For dirichlet sampling, alpha must be specified.")
+
+    if method == "dominant_label" and gamma is None:
+        raise ValueError("For dominant label sampling, gamma must be specified.")
+
+    if method == "missing_label" and num_missing_labels is None:
+        raise ValueError(
+            "For missing label sampling, num_missing_labels must be specified."
+        )
 
     if dataset == "cifar":
         data_dir = "../data/cifar/"
@@ -30,9 +52,13 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
             ]
         )
 
-        train_dataset = datasets.CIFAR10(data_dir, train=True, download=True, transform=apply_transform)
+        train_dataset = datasets.CIFAR10(
+            data_dir, train=True, download=True, transform=apply_transform
+        )
 
-        test_dataset = datasets.CIFAR10(data_dir, train=False, download=True, transform=apply_transform)
+        test_dataset = datasets.CIFAR10(
+            data_dir, train=False, download=True, transform=apply_transform
+        )
 
         # sample training data amongst users
         if iid:
@@ -40,8 +66,23 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
             user_groups = cifar_iid(train_dataset, num_users)
         else:
             # Sample Non-IID user data from CIFAR
-            if dirichlet:
-                user_groups = dirichlet_sampling(train_dataset, num_users, alpha, shared_sample_ratio)
+            if method == "dominant_label":
+                user_groups = dominant_label_sampling(
+                    train_dataset, num_users, beta, gamma, subset, save_path=save_path
+                )
+            elif method == "missing_label":
+                user_groups = missing_label_sampling(
+                    train_dataset,
+                    num_users,
+                    beta,
+                    num_missing_labels,
+                    subset,
+                    save_path=save_path,
+                )
+            elif method == "dirichlet":
+                user_groups = dirichlet_sampling(
+                    train_dataset, num_users, alpha, beta, subset, save_path=save_path
+                )
             elif unequal:
                 # Chose unequal splits for every user
                 raise NotImplementedError()
@@ -55,11 +96,17 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
         else:
             data_dir = "../data/fmnist/"
 
-        apply_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+        apply_transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+        )
 
-        train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=apply_transform)
+        train_dataset = datasets.MNIST(
+            data_dir, train=True, download=True, transform=apply_transform
+        )
 
-        test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=apply_transform)
+        test_dataset = datasets.MNIST(
+            data_dir, train=False, download=True, transform=apply_transform
+        )
 
         # sample training data amongst users
         if iid:
@@ -67,8 +114,23 @@ def get_dataset(num_users, dataset, iid, unequal, dirichlet=False, alpha=None, s
             user_groups = mnist_iid(train_dataset, num_users)
         else:
             # Sample Non-IID user data from Mnist
-            if dirichlet:
-                user_groups = dirichlet_sampling(train_dataset, num_users, alpha, shared_sample_ratio)
+            if method == "dominant_label":
+                user_groups = dominant_label_sampling(
+                    train_dataset, num_users, beta, gamma, subset, save_path=save_path
+                )
+            elif method == "missing_label":
+                user_groups = missing_label_sampling(
+                    train_dataset,
+                    num_users,
+                    beta,
+                    num_missing_labels,
+                    subset,
+                    save_path=save_path,
+                )
+            elif method == "dirichlet":
+                user_groups = dirichlet_sampling(
+                    train_dataset, num_users, alpha, beta, subset, save_path=save_path
+                )
             elif unequal:
                 # Chose unequal splits for every user
                 user_groups = mnist_noniid_unequal(train_dataset, num_users)

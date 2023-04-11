@@ -1,13 +1,13 @@
 from mpi4py import MPI
 from mpi4py.futures import MPIPoolExecutor
 
-import os
+import copy
 
 import torch
-import horovod.torch as hvd
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from options import args_parser
 from utils import exp_details, get_dataset, average_weights
@@ -27,7 +27,9 @@ def get_model(args, train_dataset, device):
         elif args.model == "cnn":
             # Convolutional neural netork
             if args.dataset == "mnist":
-                model = CNNMnist(num_channels=args.num_channels, num_classes=args.num_classes)
+                model = CNNMnist(
+                    num_channels=args.num_channels, num_classes=args.num_classes
+                )
             elif args.dataset == "fmnist":
                 model = CNNFashion_Mnist()
             elif args.dataset == "cifar":
@@ -58,17 +60,27 @@ def get_model(args, train_dataset, device):
     return model
 
 
-def evaluate_model(alpha, beta, global_epochs, args, device):
+def evaluate_model(alpha, beta, subset, global_epochs, args, device):
     global_test_accuracies = []
 
     train_dataset, test_dataset, user_groups = get_dataset(
-        args.num_users, args.dataset, False, False, True, alpha, beta
+        args.num_users,
+        args.dataset,
+        False,
+        False,
+        "missing_label",
+        alpha,
+        beta,
+        0.8,
+        2,
+        subset,
+        save_path=f"save/labels_b_{int(beta * 100)}%_s_{subset}",
     )
 
-    local_models = {i: get_model(args, train_dataset, device) for i in range(args.num_users)}
     global_model = get_model(args, train_dataset, device)
+    local_models = {i: copy.deepcopy(global_model) for i in range(args.num_users)}
 
-    for epoch in range(global_epochs):
+    for epoch in tqdm(range(global_epochs)):
         curr_users = np.random.choice(args.num_users, int(args.num_users * args.frac))
         for usr in curr_users:
             # Create a LocalUpdate object for the current user
@@ -91,9 +103,11 @@ def evaluate_model(alpha, beta, global_epochs, args, device):
                 # Self-supervised learning
                 w, loss, out = local_model.update_weights(local_models[usr])
 
-        acc, loss = test_inference(args.supervision, device, global_model, test_dataset, args.test_fraction)
+        acc, loss = test_inference(
+            args.supervision, device, global_model, test_dataset, args.test_fraction
+        )
 
-        print(f"(Rank {args.rank}) Epoch {epoch}/{global_epochs}")
+        # print(f"(Rank {args.rank}) Epoch {epoch}/{global_epochs}")
 
         local_model_weights = [local_models[usr].state_dict() for usr in curr_users]
         avg_weights = average_weights(local_model_weights)
@@ -101,13 +115,12 @@ def evaluate_model(alpha, beta, global_epochs, args, device):
         for model in local_models.values():
             model.load_state_dict(avg_weights)
 
-        global_test_accuracies.append((alpha, beta, epoch, acc))
+        global_test_accuracies.append((alpha, beta, subset, epoch, acc))
 
     return global_test_accuracies
 
 
 if __name__ == "__main__":
-
     # Parse, validate, and print arguments
     args = args_parser()
 
@@ -126,7 +139,7 @@ if __name__ == "__main__":
             local_rank += 1
     args.local_rank = local_rank
 
-    torch.cuda.set_device(args.local_rank)    
+    torch.cuda.set_device(args.local_rank)
 
     print(f"(Rank {args.rank}) {args.hostname}, GPU {args.local_rank}")
 
@@ -141,20 +154,21 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
 
     # Set up experimental values
-    global_epochs = 10
-    alpha_list = [0.1, 1, 10, 100]
-    beta_list = [0, 0.001, 0.005, 0.01]
+    global_epochs = 200
+    alpha_list = [1]
+    beta_list = [0, 0.05, 0.1, 0.2]
+    subset_list = [True, False]
 
-    tests = [(a, b) for a in alpha_list for b in beta_list]
-    tests_args = [(a, b, global_epochs, args, "cuda") for (a, b) in tests]
+    tests = [(a, b, s) for a in alpha_list for b in beta_list for s in subset_list]
+    tests_args = [(a, b, s, global_epochs, args, "cuda") for (a, b, s) in tests]
 
     accs = []
     for i, test_args in enumerate(tests_args):
         if i % (args.world_size) == args.rank:
-            a, b, *_ = test_args
-            print(f"(Rank {args.rank}) Evaluating model: a = {a}, b = {b}")
+            a, b, s, *_ = test_args
+            print(f"(Rank {args.rank}) Evaluating model: a = {a}, b = {b}, s = {s}")
             accs.extend(evaluate_model(*test_args))
-    
+
     all_accs = comm.gather(accs, root=0)
 
     if args.rank == 0:
@@ -162,9 +176,10 @@ if __name__ == "__main__":
         print("Got test accuracy data.")
 
         df = pd.DataFrame.from_records(
-            all_accs, columns=["alpha", "beta", "Global Epoch", "Global Test Accuracy"]
+            all_accs,
+            columns=["alpha", "beta", "subset", "Global Epoch", "Global Test Accuracy"],
         )
 
-        df.to_csv(f"test_acc_data_{args.dataset}_e_{args.local_ep}.csv")
+        df.to_csv(f"save/test_acc_data_{args.dataset}_e_{args.local_ep}.csv")
 
         print("Saved.")

@@ -50,16 +50,17 @@ class FedEnv(gym.Env):
 
         # Set up logging with Weights & Biases
         if self.wandb:
-            wandb.init(config=vars(args), group="choose-weights-3")
+            wandb.init(config=vars(args), group="choose-weights-6")
 
         np.set_printoptions(precision=3)
 
         users_per_round = int(self.num_users * self.frac)
         self.action_space = spaces.Box(low=0.001, high=1.0, shape=(users_per_round,))
-        self.observation_space = spaces.Box(low=-math.inf, high=math.inf, shape=(users_per_round + 1, users_per_round))
+        self.observation_space = spaces.Box(
+            low=-math.inf, high=math.inf, shape=(users_per_round + 1, users_per_round)
+        )
 
     def step(self, action):
-
         """Take a single step in the environment
 
         Parameters
@@ -99,7 +100,6 @@ class FedEnv(gym.Env):
         self.episode_actions.append(action)
 
         if global_acc > self.target_accuracy:
-
             self.all_rewards.append(self.episode_rewards)
             self.all_actions.append(self.episode_actions)
             self.all_steps.append(self.curr_step)
@@ -111,7 +111,8 @@ class FedEnv(gym.Env):
 
         # Print out some information about the step taken
         print(
-            f"[RL Environment] [Step {self.curr_training_step:{'0'}{4}}] Action: {weights}, Acc: {global_acc:.3f}, Reward: {reward:.3f}"
+            f"[RL Environment] [Step {self.curr_training_step:{'0'}{4}}] Action:"
+            f" {weights}, Acc: {global_acc:.3f}, Reward: {reward:.3f}"
         )
 
         # Sample users and get next observation
@@ -138,14 +139,24 @@ class FedEnv(gym.Env):
         print("[RL Environment] Plotting actions and rewards")
 
         # Plot all rewards
-        all_rewards_flattened = [reward for episode_rewards in self.all_rewards for reward in episode_rewards]
+        all_rewards_flattened = [
+            reward for episode_rewards in self.all_rewards for reward in episode_rewards
+        ]
         data = [[step, reward] for (step, reward) in enumerate(all_rewards_flattened)]
         table = wandb.Table(data=data, columns=["Step", "Reward"])
-        wandb.log({"rewards": wandb.plot.line(table, "Step", "Reward", title="Reward vs. Training Step")})
+        wandb.log(
+            {
+                "rewards": wandb.plot.line(
+                    table, "Step", "Reward", title="Reward vs. Training Step"
+                )
+            }
+        )
 
         # Plot total episode rewards
         total_episode_rewards = list(map(lambda l: sum(l), self.all_rewards))
-        data = [[episode, reward] for (episode, reward) in enumerate(total_episode_rewards)]
+        data = [
+            [episode, reward] for (episode, reward) in enumerate(total_episode_rewards)
+        ]
         table = wandb.Table(data=data, columns=["Episode", "Reward"])
         wandb.log(
             {
@@ -208,7 +219,9 @@ class FedEnv(gym.Env):
         self.sample_users()
 
         self.rl_actions.local_training(self.curr_usrs, self.local_ep)
-        self.rl_actions.aggregate_models(self.curr_usrs, [1 / len(self.curr_usrs)] * len(self.curr_usrs))
+        self.rl_actions.aggregate_models(
+            self.curr_usrs, [1 / len(self.curr_usrs)] * len(self.curr_usrs)
+        )
 
         self.rl_actions.compute_pca_loading_vectors(self.curr_usrs)
         observation = self.rl_actions.get_pca_reduced_models(self.curr_usrs)

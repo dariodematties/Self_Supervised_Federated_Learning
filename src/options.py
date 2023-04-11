@@ -20,7 +20,10 @@ def args_parser():
         "--ppo_n_steps",
         type=int,
         default=256,
-        help="n_steps parameter for PPO algorithm; determines number of steps before policy network receives a gradient update",
+        help=(
+            "n_steps parameter for PPO algorithm; determines number of steps before"
+            " policy network receives a gradient update"
+        ),
     )
     parser.add_argument(
         "--ppo_lr",
@@ -55,8 +58,12 @@ def args_parser():
 
     # federated arguments
     parser.add_argument("--num_users", type=int, default=100, help="number of users: K")
-    parser.add_argument("--frac", type=float, default=0.1, help="the fraction of clients: C")
-    parser.add_argument("--local_ep", type=int, default=1, help="the number of local epochs: E")
+    parser.add_argument(
+        "--frac", type=float, default=0.1, help="the fraction of clients: C"
+    )
+    parser.add_argument(
+        "--local_ep", type=int, default=1, help="the number of local epochs: E"
+    )
     parser.add_argument("--local_bs", type=int, default=10, help="local batch size: B")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate")
     parser.add_argument("--momentum", type=float, default=0.5, help="SGD momentum")
@@ -74,7 +81,12 @@ def args_parser():
         help="Whether use supervised models rather than self-supervised ones",
     )
     parser.add_argument("--model", type=str, default="cnn", help="model name")
-    parser.add_argument("--kernel_num", type=int, default=9, help="number of each kind of kernel")
+    parser.add_argument(
+        "--kernel_num",
+        type=int,
+        default=9,
+        help="number of each kind of kernel",
+    )
     parser.add_argument(
         "--kernel_sizes",
         type=str,
@@ -87,7 +99,12 @@ def args_parser():
         default=1,
         help="number of channels of imgs",
     )
-    parser.add_argument("--norm", type=str, default="batch_norm", help="batch_norm, layer_norm, or None")
+    parser.add_argument(
+        "--norm",
+        type=str,
+        default="batch_norm",
+        help="batch_norm, layer_norm, or None",
+    )
     parser.add_argument(
         "--num_filters",
         type=int,
@@ -125,12 +142,20 @@ def args_parser():
         type=int,
         help="The number of GPUs to use for training.",
     )
-    parser.add_argument("--iid", type=int, default=0, help="Default set to non-IID. Set to 1 for IID.")
+    parser.add_argument(
+        "--iid",
+        type=int,
+        default=0,
+        help="Default set to non-IID. Set to 1 for IID.",
+    )
     parser.add_argument(
         "--unequal",
         type=int,
         default=0,
-        help="whether to use unequal data splits for non-i.i.d setting (use 0 for equal splits)",
+        help=(
+            "whether to use unequal data splits for non-i.i.d setting (use 0 for equal"
+            " splits)"
+        ),
     )
     parser.add_argument(
         "--dirichlet",
@@ -142,15 +167,25 @@ def args_parser():
         "--alpha",
         type=float,
         default=1,
-        help="the alpha value governing the non-IID nature of the Dirichlet distribution",
+        help=(
+            "the alpha value governing the non-IID nature of the Dirichlet distribution"
+        ),
     )
-    parser.add_argument("--stopping_rounds", type=int, default=10, help="rounds of early stopping")
+    parser.add_argument(
+        "--stopping_rounds",
+        type=int,
+        default=10,
+        help="rounds of early stopping",
+    )
     parser.add_argument("--seed", type=int, default=1, help="random seed")
     parser.add_argument(
         "--test_fraction",
         type=float,
         default=1,
-        help="fraction of test dataset to use for test inference (use a smaller value to speed up experiments)",
+        help=(
+            "fraction of test dataset to use for test inference (use a smaller value to"
+            " speed up experiments)"
+        ),
     )
 
     args = parser.parse_args()

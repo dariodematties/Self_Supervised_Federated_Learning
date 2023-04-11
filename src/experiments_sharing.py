@@ -1,13 +1,13 @@
+from mpi4py import MPI
+from mpi4py.futures import MPIPoolExecutor
+
 import os
-import multiprocessing as mp
+
+import torch
+import horovod.torch as hvd
 
 import numpy as np
 import pandas as pd
-import matplotlib
-from matplotlib import pyplot as plt
-import seaborn as sns
-
-import torch
 
 from options import args_parser
 from utils import exp_details, get_dataset, average_weights
@@ -27,7 +27,9 @@ def get_model(args, train_dataset, device):
         elif args.model == "cnn":
             # Convolutional neural netork
             if args.dataset == "mnist":
-                model = CNNMnist(num_channels=args.num_channels, num_classes=args.num_classes)
+                model = CNNMnist(
+                    num_channels=args.num_channels, num_classes=args.num_classes
+                )
             elif args.dataset == "fmnist":
                 model = CNNFashion_Mnist()
             elif args.dataset == "cifar":
@@ -58,24 +60,26 @@ def get_model(args, train_dataset, device):
     return model
 
 
-def evaluate_model(alpha, local_epochs, shared_sample_ratio, device, args):
+def evaluate_model(alpha, beta, global_epochs, args, device):
     global_test_accuracies = []
 
     train_dataset, test_dataset, user_groups = get_dataset(
-        args.num_users, args.dataset, False, False, True, alpha, shared_sample_ratio
+        args.num_users, args.dataset, False, False, "dirichlet", alpha, beta
     )
 
-    local_models = {i: get_model(args, train_dataset, device) for i in range(args.num_users)}
+    local_models = {
+        i: get_model(args, train_dataset, device) for i in range(args.num_users)
+    }
     global_model = get_model(args, train_dataset, device)
 
-    for epoch in range(10):
+    for epoch in range(global_epochs):
         curr_users = np.random.choice(args.num_users, int(args.num_users * args.frac))
         for usr in curr_users:
             # Create a LocalUpdate object for the current user
             local_model = LocalUpdate(
                 train_dataset,
                 user_groups[usr],
-                local_epochs,
+                args.local_ep,
                 args.local_bs,
                 args.lr,
                 args.optimizer,
@@ -91,9 +95,11 @@ def evaluate_model(alpha, local_epochs, shared_sample_ratio, device, args):
                 # Self-supervised learning
                 w, loss, out = local_model.update_weights(local_models[usr])
 
-        acc, loss = test_inference(args.supervision, device, global_model, test_dataset, args.test_fraction)
+        acc, loss = test_inference(
+            args.supervision, device, global_model, test_dataset, args.test_fraction
+        )
 
-        print(f"Epoch {epoch} | Acc: {acc} | Loss: {loss}")
+        print(f"(Rank {args.rank}) Epoch {epoch}/{global_epochs}")
 
         local_model_weights = [local_models[usr].state_dict() for usr in curr_users]
         avg_weights = average_weights(local_model_weights)
@@ -101,68 +107,69 @@ def evaluate_model(alpha, local_epochs, shared_sample_ratio, device, args):
         for model in local_models.values():
             model.load_state_dict(avg_weights)
 
-        global_test_accuracies.append((alpha, local_epochs, shared_sample_ratio, epoch, acc))
+        global_test_accuracies.append((alpha, beta, epoch, acc))
 
     return global_test_accuracies
 
 
 if __name__ == "__main__":
-
-    # Define paths
-    path_project = os.path.abspath("..")
-
     # Parse, validate, and print arguments
     args = args_parser()
 
-    if args.supervision:
-        assert args.model in ["cnn", "mlp", "resnet"]
-    else:
-        assert args.model in ["autoencoder"]
+    # MPI setup
+    comm = MPI.COMM_WORLD
 
-    if args.gpu:
-        torch.cuda.set_device(int(args.gpu))
+    args.world_size = comm.Get_size()
+    args.rank = comm.Get_rank()
+    args.hostname = MPI.Get_processor_name()
+
+    local_rank = 0
+    for i, name in enumerate(MPI.COMM_WORLD.allgather(args.hostname)):
+        if i >= args.rank:
+            break
+        if name == args.hostname:
+            local_rank += 1
+    args.local_rank = local_rank
+
+    torch.cuda.set_device(args.local_rank)
+
+    print(f"(Rank {args.rank}) {args.hostname}, GPU {args.local_rank}")
+
+    comm.Barrier()
+
+    if args.rank == 0:
+        exp_details(args)
+
+    comm.Barrier()
 
     # Set random seed for numpy
     np.random.seed(args.seed)
 
-    # Set seaborn theme
-    sns.set_theme()
-
-    exp_details(args)
-
     # Set up experimental values
-    alpha_list = [0.1, 1, 10]
-    shared_sample_ratio_list = [0, 0.001, 0.01, 0.1]
-    local_epochs_list = [1, 5]
+    global_epochs = 1500
+    alpha_list = [0.1, 1, 10, 100]
+    beta_list = [0, 0.001, 0.005, 0.01]
 
-    tests = [(a, e, s) for a in alpha_list for e in local_epochs_list for s in shared_sample_ratio_list]
-    tests_args = [(a, m, s, "cuda:" + str(i % args.n_gpus), args) for i, (a, m, s) in enumerate(tests)]
+    tests = [(a, b) for a in alpha_list for b in beta_list]
+    tests_args = [(a, b, global_epochs, args, "cuda") for (a, b) in tests]
 
-    ctx = mp.get_context("forkserver")
-    with ctx.Pool(len(tests)) as p:
-        accs = p.starmap(evaluate_model, tests_args)
-    accs = np.reshape(accs, (-1, 5))
+    accs = []
+    for i, test_args in enumerate(tests_args):
+        if i % (args.world_size) == args.rank:
+            a, b, *_ = test_args
+            print(f"(Rank {args.rank}) Evaluating model: a = {a}, b = {b}")
+            accs.extend(evaluate_model(*test_args))
 
-    print("Got test accuracy data.")
+    all_accs = comm.gather(accs, root=0)
 
-    df = pd.DataFrame.from_records(
-        accs, columns=["alpha", "local_epochs", "shared_sample_ratio", "Global Epoch", "Global Test Accuracy"]
-    )
+    if args.rank == 0:
+        all_accs = [acc for accs in all_accs for acc in accs]
+        print("Got test accuracy data.")
 
-    sns.lineplot(
-        data=df,
-        x="Global Epoch",
-        y="Global Test Accuracy",
-        # style="local_epochs",
-        style="shared_sample_ratio",
-        hue="alpha",
-        palette="flare",
-        hue_norm=matplotlib.colors.LogNorm(),
-    )
+        df = pd.DataFrame.from_records(
+            all_accs, columns=["alpha", "beta", "Global Epoch", "Global Test Accuracy"]
+        )
 
-    print("Plotted.")
+        df.to_csv(f"test_acc_data_{args.dataset}_e_{args.local_ep}.csv")
 
-    df.to_csv(f"test_acc_data_{args.dataset}.csv")
-    plt.savefig(f"test_acc_plot_{args.dataset}.png")
-
-    print("Saved.")
+        print("Saved.")

@@ -24,7 +24,8 @@ def make_env(device):
 def evaluate_rl(args):
     print("[RL Main] Beginning policy network training with PPO.")
     env = SubprocVecEnv([make_env(f"cuda:{i}") for i in range(args.n_gpus)])
-    model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
+    # model = PPO("MlpPolicy", env, verbose=1, n_steps=args.ppo_n_steps, learning_rate=args.ppo_lr, gamma=args.ppo_gamma)
+    model = PPO.load("save/FedRL", env)
     model.learn(total_timesteps=args.total_timesteps * args.n_gpus)
     print("[RL Main] Finished training.")
     print("[RL Main] Saving model to save/FedRL")
@@ -32,7 +33,6 @@ def evaluate_rl(args):
 
 
 if __name__ == "__main__":
-
     # Set up timer
     start_time = time.time()
 

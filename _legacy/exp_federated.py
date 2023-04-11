@@ -5,9 +5,8 @@ import torch
 import numpy as np
 import copy
 
-from rl_environment import FedEnv
 from options import args_parser
-from utils import exp_details, get_dataset, weighted_average_weights, average_weights
+from utils import exp_details, get_dataset, average_weights
 from exp_update import LocalUpdate, test_inference
 
 from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar, AutoencoderMNIST
@@ -82,7 +81,8 @@ if __name__ == "__main__":
     train_dataset, test_dataset, user_groups = get_dataset(args)
 
     tests = {
-        "lambda=0.4": 0.4,
+        "lambda=0.0": 0.0,
+        "lambda=0.4": 0.4
     }
 
     for name, global_grad_ratio in tests.items():
@@ -98,7 +98,10 @@ if __name__ == "__main__":
         global_grad = copy.deepcopy(list(local_models[0].parameters()))
         new_global_grad = copy.deepcopy(global_grad)
 
-        for epoch in range(100):
+        for epoch in range(30):
+            for param in new_global_grad:
+                if param.grad is not None:
+                    param.grad *= 0
             for usr, model in local_models.items():
                 # Create a LocalUpdate object for the current user
                 local_model = LocalUpdate(args=args, device=args.device,
@@ -125,12 +128,16 @@ if __name__ == "__main__":
             global_grad = new_global_grad
 
             acc, loss = test_inference(args, args.device, global_model, test_dataset)
+            # acc, loss = test_inference(args, args.device, local_models[0], test_dataset)
 
-            print(f"Epoch {epoch} | Acc: {acc}")
+            print(f"Epoch {epoch} | Acc: {acc} | Loss: {loss}")
+
 
             local_model_weights = [model.state_dict() for model in local_models.values()]
             avg_weights = average_weights(local_model_weights)
             global_model.load_state_dict(avg_weights)  
+            for model in local_models.values():
+                model.load_state_dict(avg_weights)
 
             global_test_accuracies.append(acc)
             global_test_losses.append(loss)

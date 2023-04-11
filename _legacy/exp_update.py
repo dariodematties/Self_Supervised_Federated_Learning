@@ -7,6 +7,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 import copy
 
+import numpy as np
+
 
 class DatasetSplit(Dataset):
     """An abstract Dataset class wrapped around Pytorch Dataset class.
@@ -63,7 +65,6 @@ class LocalUpdate(object):
     def update_weights(self, model, global_round, global_grad, global_grad_ratio):
         # Set mode to train model
         model.train()
-        epoch_loss = []
 
         # Set optimizer for the local updates
         if self.args.optimizer == 'sgd':
