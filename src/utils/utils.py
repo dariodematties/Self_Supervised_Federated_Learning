@@ -7,7 +7,7 @@ import copy
 import torch
 from torchvision import datasets, transforms
 
-from models import MLPMnist, CNNMnist, CNNCifar
+from .models import MLPMnist, CNNMnist, CNNCifar
 
 
 def get_model(arch, dataset, device="cpu"):
@@ -147,13 +147,12 @@ def exp_details(args):
 
     print("\nModel Arguments:")
     print(f"    Supervision             : {args.supervision}")
-    print(f"    Model                   : {args.model}")
+    print(f"    Architecture            : {args.arch}")
 
     print("\nMisc. Arguments:")
     print(f"    Dataset                 : {args.dataset}")
     print(f"    Number of GPUs          : {args.n_gpus}")
     print(f"    IID                     : {args.iid}")
-    print(f"    Unequal                 : {args.unequal}")
     print(f"    Random Seed             : {args.seed}")
     print(f"    Test Fraction           : {args.test_fraction}")
     print(f"    Save Path               : {args.save_path}")

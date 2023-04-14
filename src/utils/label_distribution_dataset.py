@@ -8,8 +8,8 @@ from torchvision import datasets, transforms
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
-from update import LocalUpdate
-from sampling import dirichlet_sampling
+from .update import LocalUpdate
+from .sampling import dirichlet_sampling
 
 
 class LabelDistributionDataset(Dataset):

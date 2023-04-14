@@ -5,7 +5,14 @@
 import argparse
 
 
-def args_parser():
+def args_parser(default=False):
+    """Parses command-line arguments and returns argument Namespace.
+
+    Args:
+        default (bool): Ignores command-line arguments and returns Namespace with
+            default arguments. Useful for Jupyter notebooks.
+    """
+
     parser = argparse.ArgumentParser()
 
     # wandb logging
@@ -142,7 +149,9 @@ def args_parser():
         default="../../data",
         help="the path for saving and loading datasets",
     )
-    parser.add_argument()
 
-    args = parser.parse_args()
+    if default:
+        args = parser.parse_args("")
+    else:
+        args = parser.parse_args()
     return args
