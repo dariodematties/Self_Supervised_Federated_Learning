@@ -59,7 +59,8 @@ def get_model(arch, dataset, device="cpu"):
 
 
 def get_train_test(dataset, download=True):
-    """Returns train and test dataset splits for a given dataset.
+    """Returns train and test dataset splits for a given dataset, with appropriate
+    normalization applied.
 
     Args:
         dataset (str): the name of the dataset (either MNIST or CIFAR-10)

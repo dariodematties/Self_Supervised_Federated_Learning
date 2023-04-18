@@ -4,10 +4,10 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from torchvision import datasets, transforms
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
+from .utils import get_train_test
 from .update import LocalUpdate
 from .sampling import dirichlet_sampling
 
@@ -59,31 +59,7 @@ class LabelDistributionDataset(Dataset):
         self._alphas = [0.1, 1.0, 10.0, 100.0, 1000.0]
         dataset_dir = os.path.join(data_dir, self._dataset)
 
-        if self._dataset == "mnist":
-            apply_transform = transforms.Compose(
-                [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-            )
-            self._train_dataset = datasets.MNIST(
-                dataset_dir, train=True, download=True, transform=apply_transform
-            )
-            self._test_dataset = datasets.MNIST(
-                dataset_dir, train=False, download=True, transform=apply_transform
-            )
-        if self._dataset == "cifar":
-            apply_transform = transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    transforms.Normalize(
-                        (0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)
-                    ),
-                ]
-            )
-            self._train_dataset = datasets.CIFAR10(
-                dataset_dir, train=True, download=True, transform=apply_transform
-            )
-            self._test_dataset = datasets.CIFAR10(
-                dataset_dir, train=False, download=True, transform=apply_transform
-            )
+        self._train_dataset, self._test_dataset = get_train_test(self._dataset)
 
         meta_dataset_dir = os.path.join(
             data_dir, "label_distribution", f"ep_{self._local_ep}_{self._dataset}"
