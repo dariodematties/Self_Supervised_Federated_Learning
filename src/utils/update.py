@@ -189,7 +189,7 @@ class LocalUpdate(object):
         return output_list
 
 
-def test_inference(supervision, device, model, test_dataset, test_fraction):
+def test_inference(supervision, device, model, test_dataset, test_fraction=1):
     """Returns the test accuracy and loss."""
 
     test_batch_size = 256
