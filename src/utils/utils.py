@@ -4,10 +4,12 @@
 
 import copy
 
+import numpy as np
 import torch
 from torchvision import datasets, transforms
 
-from .models import MLPMnist, CNNMnist, CNNCifar
+from .models import MLPMnist, CNNMnist, CNNCifar, AutoencoderMNIST
+from .resnet import resnet50
 
 
 def get_model(arch, dataset, device="cpu"):
@@ -16,12 +18,13 @@ def get_model(arch, dataset, device="cpu"):
 
     Args:
         arch (str): the name of the architecture (either "cnn" or "mlp")
-        dataset (str): the name of the dataset (either "mnist" or "cifar")
+        dataset (str): the name of the dataset (either "mnist", "cifar", or "imagenet")
         device (str): the device to keep the model on
 
     >>> model = get_model("cnn", "mnist")
     >>> model = get_model("cnn", "cifar")
     >>> model = get_model("mlp", "mnist")
+    >>> model = get_model("resnet", "imagenet")
     >>> get_model("mlp", "cifar")
     Traceback (most recent call last):
      ...
@@ -38,12 +41,21 @@ def get_model(arch, dataset, device="cpu"):
             raise ValueError(
                 f"architecture '{arch}' not supported for '{dataset}' dataset"
             )
-
     elif arch == "cnn":
         if dataset == "mnist":
             model = CNNMnist()
         elif dataset == "cifar":
             model = CNNCifar()
+        else:
+            raise ValueError(
+                f"architecture '{arch}' not supported for '{dataset}' dataset"
+            )
+    elif arch == "resnet":
+        if dataset == "imagenet":
+            model, _ = resnet50()
+    elif arch == "autoencoder":
+        if dataset == "mnist":
+            model = AutoencoderMNIST()
         else:
             raise ValueError(
                 f"architecture '{arch}' not supported for '{dataset}' dataset"
@@ -58,13 +70,14 @@ def get_model(arch, dataset, device="cpu"):
     return model
 
 
-def get_train_test(dataset, download=True):
+def get_train_test(dataset, download=False, dataset_dir=None):
     """Returns train and test dataset splits for a given dataset, with appropriate
     normalization applied.
 
     Args:
-        dataset (str): the name of the dataset (either MNIST or CIFAR-10)
+        dataset (str): the name of the dataset (either "mnist", "cifar", or "imagenet")
         download (bool): if True, downloads dataset from the Internet
+        dataset_dir (str): the path to the dataset; required for ImageNet
 
     >>> train_dataset, test_dataset = get_train_test("mnist")
     >>> train_dataset, test_dataset = get_train_test("cifar")
@@ -72,18 +85,28 @@ def get_train_test(dataset, download=True):
     Traceback (most recent call last):
      ...
     ValueError: dataset 'fake_dataset' not supported
+    >>> train_dataset, test_dataset = get_train_test("imagenet")
+    Traceback (most recent call last):
+     ...
+    ValueError: to use ImageNet, you must specify the dataset_dir argument
     """
 
-    dataset_dir = f"../../data/{dataset}/"
+    if dataset_dir is None:
+        if dataset == "imagenet":
+            raise ValueError(
+                "to use ImageNet, you must specify the dataset_dir argument"
+            )
+        dataset_dir = f"../../data/{dataset}/"
+
     if dataset == "mnist":
         apply_transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
         )
         train_dataset = datasets.MNIST(
-            dataset_dir, train=True, download=False, transform=apply_transform
+            dataset_dir, train=True, download=download, transform=apply_transform
         )
         test_dataset = datasets.MNIST(
-            dataset_dir, train=False, download=False, transform=apply_transform
+            dataset_dir, train=False, download=download, transform=apply_transform
         )
     elif dataset == "cifar":
         apply_transform = transforms.Compose(
@@ -93,15 +116,65 @@ def get_train_test(dataset, download=True):
             ]
         )
         train_dataset = datasets.CIFAR10(
-            dataset_dir, train=True, download=False, transform=apply_transform
+            dataset_dir, train=True, download=download, transform=apply_transform
         )
         test_dataset = datasets.CIFAR10(
-            dataset_dir, train=False, download=False, transform=apply_transform
+            dataset_dir, train=False, download=download, transform=apply_transform
         )
+    elif dataset == "imagenet":
+        if dataset_dir is None:
+            raise ValueError("")
+        apply_transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+        train_dataset = datasets.ImageFolder(dataset_dir / "train", apply_transform)
+        test_dataset = datasets.ImageFolder(dataset_dir / "test", apply_transform)
     else:
         raise ValueError(f"dataset '{dataset}' not supported")
 
     return train_dataset, test_dataset
+
+
+def get_dataset_and_label_names(dataset):
+    """Gives the stylized name and label names for each of the classes in the specified
+    dataset.
+
+    Args:
+        dataset (str): the name of the dataset (either "mnist", "cifar", or "imagenet")
+
+    >>> dataset_name, label_names = get_dataset_and_label_names("imagenet")
+    >>> dataset_name
+    'ImageNet'
+    >>> len(label_names)
+    1000
+    """
+    if dataset == "mnist":
+        dataset_name = "MNIST"
+        label_names = [str(i) for i in range(10)]
+    elif dataset == "cifar":
+        dataset_name = "CIFAR-10"
+        label_names = [
+            "plane",
+            "car",
+            "bird",
+            "cat",
+            "deer",
+            "dog",
+            "frog",
+            "horse",
+            "ship",
+            "truck",
+        ]
+    elif dataset == "imagenet":
+        dataset_name = "ImageNet"
+        with open("utils/imagenet_labels.txt") as f:
+            label_names = f.read().splitlines()
+    return dataset_name, np.array(label_names)
 
 
 def average_weights(state_dicts):

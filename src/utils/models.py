@@ -83,6 +83,37 @@ class CNNCifar(nn.Module):
         return F.softmax(x, dim=1)
 
 
+class AutoencoderMNIST(nn.Module):
+    """A simple MLP autoencoder for the MNIST dataset, which can be used for testing
+    unsupervised FL."""
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(28 * 28, 400),
+            nn.ReLU(),
+            nn.Linear(400, 100),
+            nn.ReLU(),
+            nn.Linear(100, 50),
+            nn.ReLU(),
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(50, 100),
+            nn.ReLU(),
+            nn.Linear(100, 400),
+            nn.ReLU(),
+            nn.Linear(400, 28 * 28),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = x.view(-1, 28 * 28)
+        x = self.encoder(x)
+        x = self.decoder(x)
+        x = x.view(-1, 1, 28, 28)
+        return x
+
+
 def get_parameter_count(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
     params = sum([np.prod(p.size()) for p in model_parameters])
