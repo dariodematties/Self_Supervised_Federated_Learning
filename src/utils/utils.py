@@ -3,10 +3,12 @@
 # Python version: 3.6
 
 import copy
+import os
 
 import numpy as np
 import torch
 from torchvision import datasets, transforms
+from torchvision.transforms import InterpolationMode
 
 from .models import MLPMnist, CNNMnist, CNNCifar, AutoencoderMNIST
 from .resnet import resnet50
@@ -126,14 +128,21 @@ def get_train_test(dataset, download=False, dataset_dir=None):
             raise ValueError("")
         apply_transform = transforms.Compose(
             [
+                transforms.RandomResizedCrop(
+                    224, interpolation=InterpolationMode.BICUBIC
+                ),
                 transforms.ToTensor(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
                 ),
             ]
         )
-        train_dataset = datasets.ImageFolder(dataset_dir / "train", apply_transform)
-        test_dataset = datasets.ImageFolder(dataset_dir / "test", apply_transform)
+        train_dataset = datasets.ImageFolder(
+            os.path.join(dataset_dir, "train"), apply_transform
+        )
+        test_dataset = datasets.ImageFolder(
+            os.path.join(dataset_dir, "val"), apply_transform
+        )
     else:
         raise ValueError(f"dataset '{dataset}' not supported")
 

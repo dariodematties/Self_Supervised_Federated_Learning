@@ -4,6 +4,7 @@
 
 import numpy as np
 from scipy.stats import dirichlet
+from tqdm import tqdm
 from rich.console import Console
 
 
@@ -31,7 +32,7 @@ def dirichlet_sampling(
         subset (bool): if True, no shared samples will be provided to the client which
             have the client's most prevalent label
         print_labels (bool): whether or not to print to the console the labels given to
-            each client
+            each client (supported only for 10-class datasets)
     """
     dict_users = {}
 
@@ -45,7 +46,8 @@ def dirichlet_sampling(
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
-    for i in range(num_users):
+    print("Performing client sampling...")
+    for i in tqdm(range(num_users)):
         num_samples_per_label = np.rint(
             (dirichlet.rvs(alphas, size=1)[0] * num_samples_per_user)
         ).astype(int)
@@ -84,7 +86,8 @@ def dirichlet_sampling(
 def dominant_label_sampling(
     dataset,
     num_users=100,
-    num_samples=30_000,
+    num_samples=None,
+    num_dominant_labels=None,
     beta=0,
     gamma=0.8,
     subset=False,
@@ -98,6 +101,10 @@ def dominant_label_sampling(
     Args:
         dataset (Dataset): the dataset from which to sample
         num_users (int): the number of clients participating in FL
+        num_samples (int or None): the number of samples to divide between the clients;
+            if none, uses 5% of the samples in the dataset
+        num_dominant_labels (int): the number of dominant labels to use; if None, all
+            labels will be used as dominant labels
         beta (float): the ratio of the total number of samples to include in the shared
             pool
         gamma (float): the ratio of a client's samples that should have the dominant
@@ -105,7 +112,7 @@ def dominant_label_sampling(
         subset (bool): if True, no shared samples will be provided to the client which
             have the client's most prevalent label
         print_labels (bool): whether or not to print to the console the labels given to
-            each client
+            each client (supported only for 10-class datasets)
     """
     dict_users = {}
 
@@ -113,23 +120,44 @@ def dominant_label_sampling(
     selected = np.array([0] * len(dataset))
     all_samples = np.arange(len(dataset))
 
-    num_labels = 10
+    if num_samples is None:
+        num_samples = int(len(dataset) * 0.01)
+
+    num_labels = len(np.unique(labels))
     num_unshared_samples = num_samples * (1 - beta)
     num_shared_samples = num_samples * beta
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
-    for i in range(num_users):
-        dominant_num_samples = int(num_samples_per_user * gamma)
-        other_num_samples = int(
+    print("Performing client sampling...")
+    for i in tqdm(range(num_users)):
+        dominant_label = i % (
+            num_dominant_labels if num_dominant_labels is not None else num_labels
+        )
+
+        num_dominant_samples = int(num_samples_per_user * gamma)
+        num_non_dominant_samples = int(
             (num_samples_per_user * (1 - gamma)) // (num_labels - 1)
         )
-        user_samples = set()
-        dominant_label = i % num_labels
+        num_remaining_samples = num_samples_per_user - (
+            num_dominant_samples + num_non_dominant_samples * (num_labels - 1)
+        )
+
         num_samples_per_label = [
-            dominant_num_samples if label == dominant_label else other_num_samples
-            for label in range(10)
+            (
+                num_dominant_samples
+                if label == dominant_label
+                else num_non_dominant_samples
+            )
+            for label in range(num_labels)
         ]
+        remaining_samples = np.random.choice(
+            range(num_labels), num_remaining_samples, replace=False
+        )
+        for sample in remaining_samples:
+            num_samples_per_label[sample] += 1
+
+        user_samples = set()
         for label, num_samples in enumerate(num_samples_per_label):
             label_samples = all_samples[(selected == 0) & (labels == label)]
             samples = np.random.choice(label_samples, num_samples, replace=False)
@@ -181,7 +209,7 @@ def missing_label_sampling(
         subset (bool): if True, no shared samples will be provided to the client which
             have the client's most prevalent label
         print_labels (bool): whether or not to print to the console the labels given to
-            each client
+            each client (supported only for 10-class datasets)
     """
     dict_users = {}
 
@@ -196,7 +224,8 @@ def missing_label_sampling(
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
-    for i in range(num_users):
+    print("Performing client sampling...")
+    for i in tqdm(range(num_users)):
         num_samples_per_label = int(
             num_samples_per_user // (num_labels - num_missing_labels)
         )
@@ -254,7 +283,8 @@ def iid_sampling(dataset, num_users, print_labels=True):
     num_items = int(len(dataset) / num_users)
     dict_users, all_idxs = {}, [i for i in range(len(dataset))]
     labels = dataset.targets.numpy()
-    for i in range(num_users):
+    print("Performing client sampling...")
+    for i in tqdm(range(num_users)):
         dict_users[i] = set(np.random.choice(all_idxs, num_items, replace=False))
         all_idxs = list(set(all_idxs) - dict_users[i])
 
@@ -293,7 +323,8 @@ def non_iid_sampling(dataset, num_users, print_labels=True):
     idxs = idxs_labels[0, :]
 
     # divide and assign 2 shards/client
-    for i in range(num_users):
+    print("Performing client sampling...")
+    for i in tqdm(range(num_users)):
         rand_set = set(np.random.choice(idx_shard, 2, replace=False))
         idx_shard = list(set(idx_shard) - rand_set)
         for rand in rand_set:
@@ -309,6 +340,23 @@ def non_iid_sampling(dataset, num_users, print_labels=True):
         _print_labels(labels, dict_users)
 
     return dict_users
+
+
+def _check_for_duplicates(dict_users):
+    """Checks dictionary of user sample indices to ensure that a given sample belongs
+    to at most one user.
+
+    Args:
+        dict_users (dict): a dictionary mapping user/client indices to sample indices
+    """
+
+    for i, user_samples in dict_users.items():
+        user_samples = set(user_samples)
+        for j, user_samples_compare in dict_users.items():
+            user_samples_compare = set(user_samples_compare)
+            if (len(user_samples.intersection(user_samples_compare)) > 0) and i != j:
+                return False
+    return True
 
 
 def _print_labels(labels, dict_users):
