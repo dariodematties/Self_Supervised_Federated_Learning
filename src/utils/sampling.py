@@ -11,7 +11,7 @@ from rich.console import Console
 def dirichlet_sampling(
     dataset,
     num_users=100,
-    num_samples=30_000,
+    sample_ratio=0.8,
     alpha=1,
     beta=0,
     subset=False,
@@ -24,7 +24,8 @@ def dirichlet_sampling(
     Args:
         dataset (Dataset): the dataset from which to sample
         num_users (int): the number of clients participating in FL
-        num_samples (int): the total number of samples to allocate
+        sample_ratio (float): the ratio of the total number of samples in the
+            dataset from which user samples will be allocated
         alpha (float): concentration parameter controlling identicalness among clients
             (alpha->0 is highly non-IID; alpha->inf is highly IID)
         beta (float): the ratio of the total number of samples to include in the shared
@@ -41,8 +42,9 @@ def dirichlet_sampling(
     selected = np.array([0] * len(dataset))
     all_samples = np.arange(len(dataset))
 
-    num_unshared_samples = num_samples * (1 - beta)
-    num_shared_samples = num_samples * beta
+    num_total_samples = int(sample_ratio * len(dataset))
+    num_unshared_samples = num_total_samples * (1 - beta)
+    num_shared_samples = num_total_samples * beta
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
@@ -86,7 +88,7 @@ def dirichlet_sampling(
 def dominant_label_sampling(
     dataset,
     num_users=100,
-    num_samples=None,
+    sample_ratio=0.8,
     num_dominant_labels=None,
     beta=0,
     gamma=0.8,
@@ -101,8 +103,8 @@ def dominant_label_sampling(
     Args:
         dataset (Dataset): the dataset from which to sample
         num_users (int): the number of clients participating in FL
-        num_samples (int or None): the number of samples to divide between the clients;
-            if none, uses 5% of the samples in the dataset
+        sample_ratio (float): the ratio of the total number of samples in the
+            dataset from which user samples will be allocated
         num_dominant_labels (int): the number of dominant labels to use; if None, all
             labels will be used as dominant labels
         beta (float): the ratio of the total number of samples to include in the shared
@@ -120,12 +122,10 @@ def dominant_label_sampling(
     selected = np.array([0] * len(dataset))
     all_samples = np.arange(len(dataset))
 
-    if num_samples is None:
-        num_samples = int(len(dataset) * 0.01)
-
+    num_total_samples = int(sample_ratio * len(dataset))
+    num_unshared_samples = num_total_samples * (1 - beta)
+    num_shared_samples = num_total_samples * beta
     num_labels = len(np.unique(labels))
-    num_unshared_samples = num_samples * (1 - beta)
-    num_shared_samples = num_samples * beta
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
