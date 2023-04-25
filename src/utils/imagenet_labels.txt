@@ -132,7 +132,7 @@ flamingo
 little blue heron, Egretta caerulea
 American egret, great white heron, Egretta albus
 bittern
-crane
+crane (bird)
 limpkin, Aramus pictus
 European gallinule, Porphyrio porphyrio
 American coot, marsh hen, mud hen, water hen, Fulica americana

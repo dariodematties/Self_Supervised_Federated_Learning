@@ -3,6 +3,7 @@
 # Python version: 3.6
 
 import copy
+import csv
 import os
 
 import numpy as np
@@ -184,6 +185,46 @@ def get_dataset_and_label_names(dataset):
         with open("utils/imagenet_labels.txt") as f:
             label_names = f.read().splitlines()
     return dataset_name, np.array(label_names)
+
+
+def build_coarse_label_mapping():
+    """Returns a list that maps ImageNet labels to coarse labels across 67 classes.
+
+    Coarse labels are assigned according to
+    https://github.com/noameshed/novelty-detection/blob/master/imagenet_categories.csv.
+
+    >> fine_to_coarse = build_coarse_label_mapping()
+    >> fine_to_coarse[18]
+    4
+    >> fine_to_coarse[757]
+    48
+    """
+
+    fine_label_to_idx = {}
+    fine_to_coarse = {}
+
+    with open("utils/imagenet_labels.txt") as f:
+        fine_labels = f.read().splitlines()
+        for idx, fine_label in enumerate(fine_labels):
+            fine_label = fine_label.split(",")[0]
+            fine_label_to_idx[fine_label] = idx + 1
+
+    with open("utils/imagenet_labels_coarse.csv", "r") as csvfile:
+        reader = csv.reader(csvfile)
+
+        # Skip the header row
+        next(reader)
+
+        for idx, row in enumerate(reader):
+            coarse_idx = idx + 1
+            for fine_label in row[1:]:
+                if fine_label == "":
+                    break
+                fine_label = fine_label.replace("_", " ")
+                fine_idx = fine_label_to_idx[fine_label]
+                fine_to_coarse[fine_idx] = coarse_idx
+
+    return fine_to_coarse
 
 
 def average_weights(state_dicts):
