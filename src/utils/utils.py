@@ -54,7 +54,7 @@ def get_model(arch, dataset, device="cpu"):
                 f"architecture '{arch}' not supported for '{dataset}' dataset"
             )
     elif arch == "resnet":
-        if dataset == "imagenet":
+        if dataset == "imagenet" or dataset == "imagenet_coarse":
             model, _ = resnet50()
     elif arch == "autoencoder":
         if dataset == "mnist":
@@ -144,6 +144,26 @@ def get_train_test(dataset, download=False, dataset_dir=None):
         test_dataset = datasets.ImageFolder(
             os.path.join(dataset_dir, "val"), apply_transform
         )
+    elif dataset == "imagenet_coarse":
+        if dataset_dir is None:
+            raise ValueError("")
+        apply_transform = transforms.Compose(
+            [
+                transforms.RandomResizedCrop(
+                    224, interpolation=InterpolationMode.BICUBIC
+                ),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+        train_dataset = ImageFolderCoarse(
+            os.path.join(dataset_dir, "train"), apply_transform
+        )
+        test_dataset = ImageFolderCoarse(
+            os.path.join(dataset_dir, "val"), apply_transform
+        )
     else:
         raise ValueError(f"dataset '{dataset}' not supported")
 
@@ -185,46 +205,6 @@ def get_dataset_and_label_names(dataset):
         with open("utils/imagenet_labels.txt") as f:
             label_names = f.read().splitlines()
     return dataset_name, np.array(label_names)
-
-
-def build_coarse_label_mapping():
-    """Returns a list that maps ImageNet labels to coarse labels across 67 classes.
-
-    Coarse labels are assigned according to
-    https://github.com/noameshed/novelty-detection/blob/master/imagenet_categories.csv.
-
-    >> fine_to_coarse = build_coarse_label_mapping()
-    >> fine_to_coarse[18]
-    4
-    >> fine_to_coarse[757]
-    48
-    """
-
-    fine_label_to_idx = {}
-    fine_to_coarse = {}
-
-    with open("utils/imagenet_labels.txt") as f:
-        fine_labels = f.read().splitlines()
-        for idx, fine_label in enumerate(fine_labels):
-            fine_label = fine_label.split(",")[0]
-            fine_label_to_idx[fine_label] = idx + 1
-
-    with open("utils/imagenet_labels_coarse.csv", "r") as csvfile:
-        reader = csv.reader(csvfile)
-
-        # Skip the header row
-        next(reader)
-
-        for idx, row in enumerate(reader):
-            coarse_idx = idx + 1
-            for fine_label in row[1:]:
-                if fine_label == "":
-                    break
-                fine_label = fine_label.replace("_", " ")
-                fine_idx = fine_label_to_idx[fine_label]
-                fine_to_coarse[fine_idx] = coarse_idx
-
-    return fine_to_coarse
 
 
 def average_weights(state_dicts):
@@ -283,6 +263,60 @@ def exp_details(args):
     print(f"    Data Path               : {args.data_path}")
 
     print()
+
+
+class ImageFolderCoarse(datasets.ImageFolder):
+    """Overrides the __getitem__ method of ImageFolder to return coarse labels.
+
+    Should be used with ImageNet dataset.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fine_to_coarse = self._build_coarse_label_mapping()
+        self.targets = [self.__getitem__(i) for i in range(len(self))]
+
+    def __getitem__(self, idx):
+        image, label = super().__getitem__(idx)
+        return image, self.fine_to_coarse[label]
+
+    def _build_coarse_label_mapping(self):
+        """Returns a list that maps ImageNet labels to coarse labels across 67 classes.
+
+        Coarse labels are assigned according to
+        https://github.com/noameshed/novelty-detection/blob/master/imagenet_categories.csv.
+
+        >> fine_to_coarse = build_coarse_label_mapping()
+        >> fine_to_coarse[18]
+        4
+        >> fine_to_coarse[757]
+        48
+        """
+
+        fine_label_to_idx = {}
+        fine_to_coarse = {}
+
+        with open("utils/imagenet_labels.txt") as f:
+            fine_labels = f.read().splitlines()
+            for fine_idx, fine_label in enumerate(fine_labels):
+                fine_label = fine_label.split(",")[0]
+                fine_label_to_idx[fine_label] = fine_idx
+
+        with open("utils/imagenet_labels_coarse.csv", "r") as csvfile:
+            reader = csv.reader(csvfile)
+
+            # Skip the header row
+            next(reader)
+
+            for coarse_idx, row in enumerate(reader):
+                for fine_label in row[1:]:
+                    if fine_label == "":
+                        break
+                    fine_label = fine_label.replace("_", " ")
+                    fine_idx = fine_label_to_idx[fine_label]
+                    fine_to_coarse[fine_idx] = coarse_idx
+
+        return fine_to_coarse
 
 
 if __name__ == "__main__":

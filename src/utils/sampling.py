@@ -89,7 +89,7 @@ def dominant_label_sampling(
     dataset,
     num_users=100,
     sample_ratio=0.8,
-    num_dominant_labels=None,
+    num_labels=None,
     beta=0,
     gamma=0.8,
     subset=False,
@@ -105,7 +105,7 @@ def dominant_label_sampling(
         num_users (int): the number of clients participating in FL
         sample_ratio (float): the ratio of the total number of samples in the
             dataset from which user samples will be allocated
-        num_dominant_labels (int): the number of dominant labels to use; if None, all
+        num_labels (int): the number of dominant labels to use; if None, all
             labels will be used as dominant labels
         beta (float): the ratio of the total number of samples to include in the shared
             pool
@@ -125,15 +125,15 @@ def dominant_label_sampling(
     num_total_samples = int(sample_ratio * len(dataset))
     num_unshared_samples = num_total_samples * (1 - beta)
     num_shared_samples = num_total_samples * beta
-    num_labels = len(np.unique(labels))
+
+    if num_labels is None:
+        num_labels = len(np.unique(labels))
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
     print("Performing client sampling...")
     for i in tqdm(range(num_users)):
-        dominant_label = i % (
-            num_dominant_labels if num_dominant_labels is not None else num_labels
-        )
+        dominant_label = i % num_labels
 
         num_dominant_samples = int(num_samples_per_user * gamma)
         num_non_dominant_samples = int(
@@ -156,6 +156,8 @@ def dominant_label_sampling(
         )
         for sample in remaining_samples:
             num_samples_per_label[sample] += 1
+
+        print(num_samples_per_label)
 
         user_samples = set()
         for label, num_samples in enumerate(num_samples_per_label):
