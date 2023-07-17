@@ -1,13 +1,12 @@
 # Federated-Learning (PyTorch)
 
-Implementation of the vanilla federated learning paper : [Communication-Efficient Learning of Deep Networks from Decentralized Data](https://arxiv.org/abs/1602.05629).
+This repository originally began as an implementation of the vanilla federated learning paper: [Communication-Efficient Learning of Deep Networks from Decentralized Data](https://arxiv.org/abs/1602.05629).
 
+Experiments are produced on MNIST and CIFAR10, and both IID and non-IID sampling methods are implemented.
 
-Experiments are produced on MNIST, Fashion MNIST and CIFAR10 (both IID and non-IID). In case of non-IID, the data amongst the users can be split equally or unequally.
+Since the purpose of these experiments are to probe the federated learning paradigm at a basic level, only simple models such as MLP and CNN are used.
 
-Since the purpose of these experiments are to illustrate the effectiveness of the federated learning paradigm, only simple models such as MLP and CNN are used.
-
-## Requirments
+## Requirements
 Install all the packages from requirments.txt
 * Python3
 * Pytorch
@@ -109,3 +108,15 @@ Federated parameters (default values):
 * [Leaf: A Benchmark for Federated Settings (CMU)](https://leaf.cmu.edu/)
 * [TensorFlow Federated](https://www.tensorflow.org/federated)
 * [Google AI Blog Post](https://ai.googleblog.com/2017/04/federated-learning-collaborative.html)
+
+
+### Source Files
+The files in the top level of the src folder consist of:
+* rl_actions.py, rl_environment.py, and rl_main.py (used for some older experiments which involved situating an RL agent in a federated learning environment to make decisions about the federated training; a few changes will likely be necessary to get them working, since they were written with an old version of the utils API).
+* experiments_pca_visualization.ipynb (used for generating visualizations of the PCA-reduced model parameters of client models trained on different data)
+* distribution_predictor.ipynb (used for training a deep neural network on the meta-dataset to predict client label distributions)
+* experiments_pca_video.ipynb (used for generating a video visualization of the evolution of PCA-reduced global model parameters across FL training)
+* experiments_sharing.py and experiments_sharing_subset.py (used for experiments to assess the extent to which sharing samples across clients could improve accuracy)
+* experiments_analysis.ipynb (used for conducting analysis of experiments performed using experiments_sharing.py and experiments_sharing_subset.py)
+
+The utils folder consists of several files to support various parts of the FL training (e.g. sampling data for clients, training local models, aggregating models).
