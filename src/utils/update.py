@@ -79,7 +79,7 @@ class LocalUpdate(object):
             optimizer = torch.optim.SGD(model.parameters(), lr=self.lr, momentum=0.5)
         elif self.optimizer == "adam":
             optimizer = torch.optim.Adam(
-                model.parameters(), lr=self.lr, weight_decay=1e-4
+                model.parameters(), lr=self.lr
             )
 
         if self.supervision:

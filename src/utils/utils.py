@@ -228,6 +228,23 @@ def weighted_average_weights(state_dicts, weights):
     return w_avg
 
 
+def add_noise(state_dict, noise_type, scale):
+    """Add Gaussian noise to the parameters in a state dict.
+
+    Args:
+        scale (int): a positive integer defining the scale of the noise to add
+    """
+    valid_noise_types = {"gaussian", "laplacian"}
+    if noise_type not in valid_noise_types:
+        raise ValueError("noise_type must be one of:", "".join(valid_noise_types))
+    for k in state_dict:
+        if noise_type == "gaussian":
+            noise = np.random.normal(scale=scale)
+        if noise_type == "laplacian":
+            noise = np.random.laplace(scale=scale)
+        state_dict[k] += noise
+
+
 def exp_details(args):
     """Print out the passed arguments."""
     print("\nExperimental details:")

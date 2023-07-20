@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
-from .utils import get_train_test
+from .utils import get_train_test, add_noise
 from .update import LocalUpdate
 from .sampling import dirichlet_sampling
 
@@ -30,6 +30,8 @@ class LabelDistributionDataset(Dataset):
         data_dir,
         base_model_path,
         device,
+        noise_type="gaussian",
+        noise_scale=0.0
     ):
         """
         Args:
@@ -45,6 +47,8 @@ class LabelDistributionDataset(Dataset):
             base_model_path (str): the path to the base model, which will be the
                 starting point for the client models
             device (str): the device on which to perform local model training
+            noise_type (str): the type of noise ("gaussian" or "laplacian") to add
+            noise_scale (float): the scale of noise to add
         """
         self._device = device
         self._dataset = dataset
@@ -55,6 +59,8 @@ class LabelDistributionDataset(Dataset):
         self._supervision = supervision
         self._train = train
         self._base_model = torch.load(base_model_path)
+        self._noise_type = noise_type
+        self._noise_scale = noise_scale
 
         self._alphas = [0.1, 1.0, 10.0, 100.0, 1000.0]
         dataset_dir = os.path.join(data_dir, self._dataset)
@@ -62,7 +68,7 @@ class LabelDistributionDataset(Dataset):
         self._train_dataset, self._test_dataset = get_train_test(self._dataset)
 
         meta_dataset_dir = os.path.join(
-            data_dir, "label_distribution", f"ep_{self._local_ep}_{self._dataset}"
+            data_dir, "label_distribution", f"{self._dataset}_ep_{self._local_ep}_lr_{self._lr}_bs_{self._local_bs}_{self._noise_type}_{self._noise_scale}"
         )
         train_dir = os.path.join(meta_dataset_dir, "train")
         test_dir = os.path.join(meta_dataset_dir, "test")
@@ -127,7 +133,7 @@ class LabelDistributionDataset(Dataset):
                 samples = dirichlet_sampling(
                     dataset,
                     num_users=1,
-                    num_samples=500,
+                    num_total_samples=500,
                     alpha=alpha,
                     print_labels=False,
                 )[0]
@@ -160,6 +166,7 @@ class LabelDistributionDataset(Dataset):
                 self._device,
             )
             local_update.update_weights(local_model)
+            add_noise(local_model.state_dict(), noise_type=self._noise_type, scale=self._noise_scale)
 
             params = (
                 torch.cat([p.flatten() for p in local_model.parameters()])

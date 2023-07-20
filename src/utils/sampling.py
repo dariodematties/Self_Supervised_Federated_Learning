@@ -15,7 +15,8 @@ def dirichlet_sampling(
     alpha=1,
     beta=0,
     subset=False,
-    print_labels=True,
+    print_labels=False,
+    num_total_samples=None
 ):
     """
     Sample client data by drawing populations from a Dirichlet distribution
@@ -41,15 +42,17 @@ def dirichlet_sampling(
     labels = np.array(dataset.targets)
     selected = np.array([0] * len(dataset))
     all_samples = np.arange(len(dataset))
-
-    num_total_samples = int(sample_ratio * len(dataset))
+    
+    if num_total_samples is None:
+        num_total_samples = int(sample_ratio * len(dataset))
     num_unshared_samples = num_total_samples * (1 - beta)
     num_shared_samples = num_total_samples * beta
 
     # Client Samples
     num_samples_per_user = num_unshared_samples // num_users
-    print("Performing client sampling...")
-    for i in tqdm(range(num_users)):
+    if print_labels:
+        print("Performing client sampling...")
+    for i in range(num_users):
         num_samples_per_label = np.rint(
             (dirichlet.rvs(alphas, size=1)[0] * num_samples_per_user)
         ).astype(int)
@@ -156,8 +159,6 @@ def dominant_label_sampling(
         )
         for sample in remaining_samples:
             num_samples_per_label[sample] += 1
-
-        print(num_samples_per_label)
 
         user_samples = set()
         for label, num_samples in enumerate(num_samples_per_label):
@@ -284,7 +285,11 @@ def iid_sampling(dataset, num_users, print_labels=True):
     """
     num_items = int(len(dataset) / num_users)
     dict_users, all_idxs = {}, [i for i in range(len(dataset))]
-    labels = dataset.targets.numpy()
+    try:
+        labels = dataset.targets.numpy()
+    except AttributeError:
+        # For CIFAR-10, dataset.targets seems to be a list.
+        labels = np.array(dataset.targets)
     print("Performing client sampling...")
     for i in tqdm(range(num_users)):
         dict_users[i] = set(np.random.choice(all_idxs, num_items, replace=False))
